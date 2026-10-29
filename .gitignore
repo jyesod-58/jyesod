@@ -1,0 +1,5 @@
+web-crawler/__pycache__/
+web-crawler/tests/__pycache__/
+web-crawler/.venv/
+web-crawler/.env
+web-crawler/output/

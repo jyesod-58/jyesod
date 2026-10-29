@@ -256,7 +256,8 @@ button.review-total{cursor:pointer;font:inherit;font-size:11px;line-height:1.7}b
   <section class="panel" id="projectTools" aria-label="작업 저장과 보고서"><div class="body line">
     <button class="btn sm" id="saveProject" type="button">프로젝트 저장 (원문 포함)</button>
     <button class="btn sm" id="loadProject" type="button">프로젝트 불러오기</button>
-    <input id="projectInput" type="file" accept=".json,application/json" hidden>
+    <input id="projectInput" type="file" accept=".json,.jsonl,.ndjson,application/json" hidden>
+    <button class="btn sm" id="purgePayloads" type="button">임시 원문 전체 삭제</button>
     <button class="btn sm" id="saveReport" type="button">마스킹 보고서 저장</button>
     <p class="hint">프로젝트는 원문과 검토 판정을 로컬 JSON으로 저장합니다. 원문 프로젝트는 기관의 보관 정책에 따라 보호하세요. 마스킹 보고서에는 응답 원문을 넣지 않습니다. 자동 탐지는 개인정보 노출 취약점의 확정 판정이 아닙니다.</p>
   </div></section>
@@ -270,7 +271,7 @@ button.review-total{cursor:pointer;font:inherit;font-size:11px;line-height:1.7}b
   <details class="panel prominent" id="loader" open>
     <summary id="loaderSummary">응답 데이터 불러오기</summary>
     <div class="body">
-      <p class="hint" id="loaderHint">필드에 <b>담긴 값</b>에서 민감정보를 찾습니다(필드 이름은 탐지 단서로만 사용). 여러 파일을 한 번에 선택하거나 이 페이지로 끌어다 놓으세요. 기존 결과는 유지하고 새로운 응답만 누적 분석합니다. 동일 응답도 원거래별로 보존하며 결과 표시만 선택적으로 묶습니다. 전체를 비우려면 클리어를 누르세요. 모든 분석은 이 브라우저 안에서만 이뤄지며 데이터는 외부로 전송되지 않습니다.<br>
+      <p class="hint" id="loaderHint"><b>Burp XML은 파일당 500MiB까지, JSON/HAR/텍스트는 100MiB까지 가져옵니다.</b> 25MiB 초과 파일은 브라우저 임시 저장소를 사용합니다. 필드에 <b>담긴 값</b>에서 민감정보를 찾습니다(필드 이름은 탐지 단서로만 사용). 여러 파일을 한 번에 선택하거나 이 페이지로 끌어다 놓으세요. 기존 결과는 유지하고 새로운 응답만 누적 분석합니다. 동일 응답도 원거래별로 보존하며 결과 표시만 선택적으로 묶습니다. 전체를 비우려면 클리어를 누르세요. 모든 분석은 이 브라우저 안에서만 이뤄지며 데이터는 외부로 전송되지 않습니다.<br>
         · <b>Burp XML</b> — Site map 또는 Proxy HTTP history에서 <b>Save selected items</b>로 저장(응답 포함)<br>
         · <b>HAR</b> — 응답 내용이 포함된 HAR 파일<br>
         · <b>results.json</b> — 크롤러가 만든 수집 결과(본문 포함)<br>
@@ -350,6 +351,28 @@ function scanRegex(body, re, onMatch){
 }
 const adj=(body,i,j,bad)=>bad.test(body[i-1]||"")||bad.test(body[j]||"");  // 앞뒤 인접문자 차단
 
+function findEmails(body,limit=50000,diagnose=true){
+  const out=[],local=/[A-Za-z0-9._%+\-]/,domain=/[A-Za-z0-9.\-]/;let cursor=0,p;
+  while((p=body.indexOf('@',cursor))>=0){
+    cursor=p+1;let a=p,b=p+1;while(a>0&&p-a<64&&local.test(body[a-1]))a--;
+    if(a===p||(a>0&&local.test(body[a-1])))continue;
+    while(b<body.length&&b-p<=254&&domain.test(body[b]))b++;
+    if(b-p>254)continue;while(body[b-1]==='.')b--;
+    const tail=body.slice(p+1,b);
+    if(!/^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$/.test(tail))continue;
+    if(out.length>=limit){if(diagnose&&scanBudgetDiagnostics)scanBudgetDiagnostics.push({reason:'정규식 매치 제한(50,000): 일부 미분석'});break;}
+    out.push({value:body.slice(a,b),index:a,len:b-a});if(!diagnose&&out.length>=limit)return out;
+  }
+  return out;
+}
+function findJWTs(body){
+  const out=[],valid=c=>/[A-Za-z0-9_.-]/.test(c);let i=0;
+  while(i<body.length){if(!valid(body[i])){i++;continue;}const a=i;while(i<body.length&&valid(body[i]))i++;if(!body.startsWith('eyJ',a))continue;
+    const value=body.slice(a,i);if(value.length>32768){if(scanBudgetDiagnostics&&value.includes('.'))scanBudgetDiagnostics.push({reason:'JWT 후보 길이 제한: 일부 미분석'});continue;}
+    const parts=value.split('.');if(parts.length===3&&parts[0].length>=11&&parts[1].length>=8&&parts[2].length>=4){if(out.length>=50000){if(scanBudgetDiagnostics)scanBudgetDiagnostics.push({reason:'JWT 매치 제한: 일부 미분석'});break;}out.push({value,index:a,len:i-a});}
+  }
+  return out;
+}
 const STRUCT=[
   { id:"rrn", label:"주민등록번호", color:"var(--c-rrn)",
     find:(b)=>scanRegex(b,/(\d{2})(\d{2})(\d{2})[-\s]?([1-4])(\d{6})/g,(m,body)=>{
@@ -392,18 +415,13 @@ const STRUCT=[
       if(!issuer)return null;
       return {value:digits, index:s, len:m[0].length, verified:luhn(digits)};
     }) },
-  { id:"email", label:"이메일", color:"var(--c-email)",
-    find:b=>scanRegex(b,/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g,(m,body)=>{
-      const s=m.index, e=s+m[0].length; if(/[A-Za-z0-9._%+\-]/.test(body[s-1]||""))return null;
-      return {value:m[0], index:s, len:m[0].length};
-    }) },
+  { id:"email",label:"이메일",color:"var(--c-email)",find:b=>findEmails(b) },
   { id:"phone", label:"전화번호", color:"var(--c-phone)",
     find:b=>scanRegex(b,/(?:(?:\+?82|0082)[ \t.-]?(?:\(0\)[ \t.-]?)?(?:1[016-9]|2|[3-6]\d|50\d|70|80)[ \t.-]?\d{3,4}[ \t.-]?\d{4}|0(?:1[016-9]|2|[3-6]\d|50\d|70|80)[ \t.-]?\d{3,4}[ \t.-]?\d{4})/g,(m,body)=>{
       const s=m.index, e=s+m[0].length; if(adj(body,s,e,/[A-Za-z0-9_]/))return null;
       return {value:m[0].trim(), index:s, len:m[0].length};
     }) },
-  { id:"jwt", label:"JWT·토큰", color:"var(--c-secret)",
-    find:b=>scanRegex(b,/eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{4,}/g,(m)=>({value:m[0], index:m.index, len:m[0].length})) },
+  { id:"jwt",label:"JWT·토큰",color:"var(--c-secret)",find:b=>findJWTs(b) },
   { id:"ip", label:"IP 주소", color:"var(--c-ip)",
     find:b=>scanRegex(b,/(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)/g,(m,body)=>{
       const s=m.index, e=s+m[0].length; if(adj(body,s,e,/[\d.]/))return null;
@@ -506,7 +524,7 @@ function objHasPII(prims){
   for(const k in prims){
     const v=prims[k];
     if(PII_KEY_RE.test(k)) return true;
-    if(/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/.test(v)) return true;
+    if(findEmails(v,1,false).length) return true;
     if(/01[016-9][-\s.]?\d{3,4}[-\s.]?\d{4}/.test(v)) return true;
     if(/\b\d{6}[-\s]?[1-8]\d{6}\b/.test(v)) return true;
   }
@@ -559,10 +577,10 @@ function classifyAccountKeys(pages){
 }
 
 /* ===== 상태 ===== */
-function initialState(){return { pages:[], findings:[], off:new Set(), q:"", searchError:"", mask:true, strict:false, candidates:true, skipAssets:false, diagnostics:[], custom:[], isSample:false, fileCount:0, importFailures:[], sourceSequence:0, view:"type", operatorInference:false, operatorFindings:[], reviews:new Map(), reviewFilter:null, dedupe:true, hostOff:new Set(), hostState:new Map(), pageState:new Map(), statusFilter:"all" };}
+function initialState(){return { pages:[], findings:[], off:new Set(), q:"", searchError:"", mask:true, strict:false, candidates:true, skipAssets:false, diagnostics:[], custom:[], isSample:false, fileCount:0, importFailures:[], sourceSequence:0, view:"type", operatorInference:false, operatorFindings:[], reviews:new Map(), reviewFilter:null, dedupe:true, hostOff:new Set(), hostState:new Map(), pageState:new Map(), statusFilter:"all",largeMode:false,sources:[] };}
 const S=initialState();
-const TOOL_VERSION='2.0.0';
-const LIMITS={fileBytes:25*1024*1024,responseBytes:8*1024*1024,textChars:4*1024*1024,totalChars:75*1024*1024,items:20000,findings:50000};
+const TOOL_VERSION='2.1.0';
+const LIMITS={fileBytes:500*1024*1024,smallFileBytes:25*1024*1024,nonXmlBytes:100*1024*1024,selectedBytes:1024*1024*1024,responseBytes:8*1024*1024,textChars:4*1024*1024,totalChars:75*1024*1024,items:250000,findings:50000,totalFindings:250000,resultChars:64*1024*1024};
 let scanBudgetDiagnostics=null,preparing=false;
 const yieldUI=()=>new Promise(resolve=>setTimeout(resolve,0));
 
@@ -602,7 +620,7 @@ function tag(b,n){
 function stripHeaders(t){return responseInfo(t).body;}
 function parseJSONBody(t){try{return JSON.parse(t.trim());}catch{return null;}}
 function toPages(text,name){
-  if(text.length>LIMITS.fileBytes)throw new Error('입력 한도 25MiB 초과: Burp에서 나누어 내보내세요.');
+  if(text.length>LIMITS.nonXmlBytes)throw new Error('텍스트/JSON 단일 파싱 한도 100Mi 문자 초과: Burp XML 파일 선택을 사용하세요.');
   const trimmed=text.replace(/^\uFEFF/,'').trim();if(!trimmed)throw new Error('분석할 내용이 없습니다.');
   if(/^<\?xml|^<items[\s>]|^<!DOCTYPE\s+items/i.test(trimmed)){
     if(/<!ENTITY\s/i.test(text))throw new Error('사용자 정의 XML ENTITY는 허용하지 않습니다. 이 파일은 미분석입니다.');
@@ -839,6 +857,7 @@ function clip(text,start,len){
   return { pre:text.slice(a,start).replace(/\s+/g," "), mid:text.slice(start,start+len),
            post:text.slice(start+len,b).replace(/\s+/g," "), head:a>0?"…":"", tail:b<text.length?"…":"" };
 }
+function detachedText(value,max=4096){return new TextDecoder().decode(new TextEncoder().encode(String(value??'').slice(0,max)));}
 function sourceKind(source){return source==='요청 URL'?'url':'response';}
 function scanAll(options={}){
   const keymap=buildKeymap(options.custom||S.custom),out=[],diagnostics=options.diagnostics||[];
@@ -846,11 +865,11 @@ function scanAll(options={}){
   const operatorKeys=options.operatorKeys||new Map();
   const emit=(pg,type,value,key,ctx,extra={})=>{
     const cat=STRUCT.find(d=>d.id===type)||KEYCATS[type]||{label:type==="acct"?"작성자·수정자 계정 후보":"인증정보·시크릿",color:type==="acct"?"var(--c-acct)":"var(--c-secret)"};
-    const {range,...context}=ctx;
+    const {range,...context}=ctx;const truncatedValue=String(value).length>4096;value=detachedText(value)+(truncatedValue?'…':'');for(const k of Object.keys(context))if(typeof context[k]==='string')context[k]=detachedText(context[k]);key=detachedText(key,1024);
     if(out.length>=LIMITS.findings){if(!diagnostics.some(d=>d.reason==='응답 탐지 한도(50,000): 일부 미분석'))diagnostics.push({reason:'응답 탐지 한도(50,000): 일부 미분석'});return;}
     const eid=JSON.stringify([type,sourceKind(extra.source),range?.start??key,range?.end,value]);
     if(pg._seenFindings.has(eid))return;pg._seenFindings.add(eid);
-    out.push({type,label:cat.label,color:cat.color,value,url:pg.url,key,ctx:context,pi:pg.i,host:hostOf(pg.url),start:range?.start,end:range?.end,...extra});
+    out.push({type,label:cat.label,color:cat.color,value,url:pg.url,key,ctx:context,pi:pg.i,host:hostOf(pg.url),start:range?.start,end:range?.end,truncatedValue,...extra});
   };
   for(const pg of (options.pages||S.pages)){
     const diagnosticStart=diagnostics.length;pg.analysis={state:'complete',reasons:[]};pg._seenFindings=new Set();scanBudgetDiagnostics=diagnostics;
@@ -980,9 +999,10 @@ function scanAll(options={}){
   return out;
 }
 let searchCache={pages:null,q:'',skipAssets:null,results:[],error:''};
-function clearSearchCache(){searchCache={pages:null,q:'',skipAssets:null,results:[],error:''};}
-function runCustom(q){
-  if(searchCache.pages===S.pages&&searchCache.q===q&&searchCache.skipAssets===S.skipAssets){S.searchError=searchCache.error;return searchCache.results;}
+let searchVersion=0;
+function clearSearchCache(){++searchVersion;searchCache={pages:null,q:'',skipAssets:null,results:[],error:''};}
+function runCustom(q,pagesOverride=null){
+  if(!pagesOverride&&searchCache.pages===S.pages&&searchCache.q===q&&searchCache.skipAssets===S.skipAssets){S.searchError=searchCache.error;return searchCache.results;}
   const out=[],seen=new Set();let re;const mm=/^\/(.+)\/([gimsuy]*)$/.exec(q);S.searchError='';
   try{re=mm?new RegExp(mm[1],mm[2].includes('g')?mm[2]:mm[2]+'g'):new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi');}
   catch(e){S.searchError='검색식 오류: '+e.message;searchCache={pages:S.pages,q,skipAssets:S.skipAssets,results:[],error:S.searchError};return [];}
@@ -992,10 +1012,10 @@ function runCustom(q){
       if(!m[0]){const cp=text.codePointAt(re.lastIndex);re.lastIndex+=re.unicode&&cp>65535?2:1;continue;}
       const range=sourceRange(location,m.index,m[0].length);if(!range)continue;
       const identity=JSON.stringify([pg.i,source,range.start,range.end]);if(seen.has(identity))continue;seen.add(identity);
-      out.push({type:'search',label:'직접 검색',color:'var(--c-custom)',value:m[0],url:pg.url,key,pi:pg.i,host:hostOf(pg.url),start:range.start,end:range.end,source,tier:'search',ctx:clip(text,m.index,m[0].length)});
+      out.push({type:'search',label:'직접 검색',color:'var(--c-custom)',value:detachedText(m[0]),truncatedValue:m[0].length>4096,url:pg.url,key:detachedText(key,1024),pi:pg.i,host:hostOf(pg.url),start:range.start,end:range.end,source,tier:'search',ctx:Object.fromEntries(Object.entries(clip(text,m.index,m[0].length)).map(([k,v])=>[k,detachedText(v)]))});
     }
   }
-  for(const pg of S.pages){
+  for(const pg of (pagesOverride||S.pages)){
     if(pg.importError||!pg.text||pg.text.length>LIMITS.textChars)continue;if(S.skipAssets&&isStaticAsset(pg.url,pg.text))continue;
     const body=stripHeaders(pg.text||''),base={kind:'plain',raw:body,base:(pg.text||'').length-body.length};
     if(body){
@@ -1006,10 +1026,20 @@ function runCustom(q){
     }
     if(pg.url)find(pg.url,pg,'요청 URL','URL',{kind:'plain',raw:pg.url,base:0});
   }
-  searchCache={pages:S.pages,q,skipAssets:S.skipAssets,results:out,error:''};return out;
+  if(!pagesOverride)searchCache={pages:S.pages,q,skipAssets:S.skipAssets,results:out,error:''};return out;
 }
-function updateSearch(){
-  clearTimeout(t);t=null;closeDetail(false);S.q=$('#q').value.trim();S.searchError='';if(!S.q)clearSearchCache();render();
+async function updateSearch(){
+  clearTimeout(t);t=null;closeDetail(false);S.q=$('#q').value.trim();S.searchError='';clearSearchCache();
+  if(!S.q||!S.largeMode){render();return;}
+  const version=searchVersion,q=S.q,pages=S.pages,results=[];let resultChars=0,budgetReached=false;searchCache={pages,q,skipAssets:S.skipAssets,results,error:''};render();
+  try{for(let i=0;i<pages.length;i++){
+    if(version!==searchVersion)return;const pg=await hydratePage(pages[i]);
+    for(const hit of runCustom(q,[pg])){const chars=JSON.stringify(hit).length;if(results.length>=LIMITS.totalFindings||resultChars+chars>LIMITS.resultChars){budgetReached=true;break;}resultChars+=chars;results.push(hit);}if(budgetReached){S.searchError='검색 결과 250,000건/64Mi 문자 제한: 일부 결과만 표시합니다.';break;}
+    if(S.searchError)break;scanStatus(`원문 검색 중 ${i+1}/${pages.length}`);if(i%20===0)await yieldUI();
+    if(results.length>=LIMITS.totalFindings){S.searchError='검색 결과 250,000건 제한에 도달했습니다. 일부 결과만 표시합니다.';break;}
+  }if(version===searchVersion){searchCache={pages,q,skipAssets:S.skipAssets,results,error:S.searchError};render();}}
+  catch(e){if(version===searchVersion){S.searchError='저장 원문 검색 실패: '+e.message;render();}}
+  finally{if(version===searchVersion)scanStatus('');}
 }
 function renderSearchStatus(all){
   const status=$('#searchStatus');status.hidden=!S.q;$('#searchClear').hidden=!$('#q').value;
@@ -1043,7 +1073,7 @@ function copy(text,btn){
 }
 function statusMatches(f){const status=Number(S.pages[f.pi]?.status);return !S.statusFilter||S.statusFilter==='all'||(S.statusFilter==='2xx'?status>=200&&status<300:!(status>=200&&status<300));}
 function activeFindings(){
-  if(S.q){let found=runCustom(S.q).filter(statusMatches);if(S.hostOff.size)found=found.filter(f=>!S.hostOff.has(f.host));return found;}
+  if(S.q){let found=(S.largeMode?searchCache.results:runCustom(S.q)).filter(statusMatches);if(S.hostOff.size)found=found.filter(f=>!S.hostOff.has(f.host));return found;}
   let f=S.findings.filter(x=>!S.off.has(x.type)&&statusMatches(x));
   if(!S.operatorInference)f=f.filter(x=>x.type!=="operator");
   if(!S.candidates) f=f.filter(x=>x.tier!=="candidate");
@@ -1083,7 +1113,7 @@ function badges(types){
 }
 function pathOf(u){ try{ const x=new URL(u); return x.pathname+x.search; }catch(e){ return u; } }
 // 인증 토큰·계정의 대소문자와 구분자를 임의로 바꾸어 합치지 않는다.
-const groupKey=f=>JSON.stringify([f.type,f.value,f.source,f.tier,f.verified,...(S.dedupe?[]:[f.pi,f.key,f.start,f.end])]);
+const groupKey=f=>JSON.stringify([f.type,f.value,f.source,f.tier,f.verified,...(S.dedupe&&!f.truncatedValue?[]:[f.pi,f.key,f.start,f.end])]);
 function findingRow(it,color,showUrl){
   const row=el("div","finding clickable");
   const val=el("div","fval");val.style.setProperty("--c",color);
@@ -1244,7 +1274,7 @@ function render(){
   const catalog=hostCatalog(all);buildHostChips();renderHostSummary(catalog);renderReviewFilter();renderSearchStatus(all);
   const info=S.view==="url"?renderUrlView(all,box):renderTypeView(all,box);
   if(!all.length&&(S.view!=="url"||!info.hostCount))box.append(el("div","empty",S.q?(S.searchError||"일치하는 검색 결과가 없습니다. 검색어·숨긴 호스트·정적 리소스 제외 설정을 확인하세요."):S.findings.some(f=>f.tier==="candidate")?"현재 설정에서 표시할 항목이 없습니다. 검토 후보 목록이 있으니 검토 후보 포함·유형·호스트 설정을 확인하세요.":"현재 조건에서 탐지된 항목이 없습니다. 미탐·미지원·분석 실패 가능성이 있으므로 분석 범위를 확인하고 안전 판정으로 사용하지 마세요."));
-  const withResp=S.pages.filter(p=>p.text).length,candidates=S.findings.filter(f=>f.tier==="candidate").length;
+  const withResp=S.pages.filter(p=>p.hasResponse||p.text).length,candidates=S.findings.filter(f=>f.tier==="candidate").length;
   const skipped=S.diagnostics.reduce((m,d)=>(m[d.reason]=(m[d.reason]||0)+1,m),{});
   $("#count").textContent=info.text+` · 응답 ${withResp}/${S.pages.length}개 · 검토 후보 ${candidates}회${S.candidates?" 포함":" 숨김"}`+(S.off.size?" · 일부 유형 숨김":"")+(S.hostOff.size?" · 일부 호스트 숨김":"")+" · 제외/제한: "+(Object.entries(skipped).map(([k,v])=>`${k} ${v}개`).join(", ")||"없음");
   renderCoverage();
@@ -1264,11 +1294,13 @@ function buildHostChips(){
 /* 선택한 실제 응답의 원문 범위를 사용한다. 다른 응답의 첫 값으로 대체하지 않는다. */
 const D={it:null,k:0,pi:-1,raw:'',start:-1,end:-1,from:0,to:0,returnFocus:null,returnIndex:0,mask:false};
 const WIN=40000,STEP=60000;
-function openDetail(it,k=0,trigger=null){
-  const occ=it.occ[k],pg=S.pages[occ?.pi];if(!pg)return;
+let detailLoadVersion=0;
+async function openDetail(it,k=0,trigger=null){
+  const token=++detailLoadVersion,occ=it.occ[k],meta=S.pages[occ?.pi];if(!meta)return;
+  let pg;try{pg=await hydratePage(meta);}catch(e){showToast(e.message);return;}if(token!==detailLoadVersion)return;
   if(trigger){D.returnFocus=trigger;D.returnIndex=[...document.querySelectorAll('.detail-open')].indexOf(trigger);}
   if(trigger||!D.it)D.mask=S.mask;
-  D.it=it;D.k=k;D.pi=occ.pi;D.isURL=occ.source==='요청 URL';D.raw=D.isURL?pg.url:pg.text||'';
+  D.it=it;D.k=k;D.pi=occ.pi;D.isURL=occ.source==='요청 URL';D.responseText=pg.text||'';D.raw=D.isURL?pg.url:D.responseText;
   D.start=Number.isInteger(occ.start)?occ.start:-1;D.end=Number.isInteger(occ.end)?occ.end:-1;
   if(D.start<0||D.end>D.raw.length||D.end<=D.start){D.start=-1;D.end=-1;}
   D.from=D.raw.length<=WIN*3?0:Math.max(0,(D.start>=0?D.start:0)-WIN);
@@ -1277,9 +1309,9 @@ function openDetail(it,k=0,trigger=null){
   renderDrawer(true);$('#dClose').focus();
 }
 function closeDetail(restore=true){
-  if(!D.it)return;
+  ++detailLoadVersion;if(!D.it)return;
   $('#drawer').hidden=true;$('#dBackdrop').hidden=true;document.body.classList.remove('drawer-open');$('.wrap').inert=false;
-  D.it=null;D.raw='';$('#dBody').replaceChildren();
+  D.it=null;D.raw='';D.responseText='';$('#dBody').replaceChildren();
   if(restore){const target=D.returnFocus?.isConnected?D.returnFocus:document.querySelectorAll('.detail-open')[Math.max(0,D.returnIndex)];target?.focus();}
   D.returnFocus=null;
 }
@@ -1346,7 +1378,7 @@ function buildStats(){
   const st=$("#stats"); st.replaceChildren();
   const uniq=new Set(S.findings.map(f=>JSON.stringify([f.type,f.value,f.url,f.key,f.source,f.tier])));
   const types=new Set(S.findings.map(f=>f.type));
-  [...(S.fileCount?[[S.fileCount,"파일"]]:[]),[S.pages.length,"페이지"],[S.pages.filter(p=>p.text).length,"응답 보유"],[uniq.size,"후보 포함 묶음 수"],[types.size,"발견 유형"]]
+  [...(S.fileCount?[[S.fileCount,"파일"]]:[]),[S.pages.length,"페이지"],[S.pages.filter(p=>p.hasResponse||p.text).length,"응답 보유"],[uniq.size,"후보 포함 묶음 수"],[types.size,"발견 유형"]]
     .forEach(([v,l])=>{const s=el("span");s.append(el("b","",String(v)),document.createTextNode(" "+l));st.append(s);});
 }
 
@@ -1382,23 +1414,33 @@ async function rescan(){
   cancelAnalysis();closeDetail(false);const version=analysisVersion,store=analysisStore(),mode=S.skipAssets;
   const cached=store.get(mode);if(cached){applyAnalysis(cached);return;}
   analysisBusy=true;scanStatus('응답 분석 준비 중…');await yieldUI();
-  const pages=S.pages,diagnostics=[],all=[],byHost=new Map();
+  const pages=S.pages,diagnostics=[],all=[],byHost=new Map();let usedChars=0,processed=0,failureMessage="";
   try{
-    for(const pg of pages){const h=hostOf(pg.url);if(!byHost.has(h))byHost.set(h,[]);if(!pg.importError&&pg.text.length<=LIMITS.textChars)byHost.get(h).push(pg);}
+    for(const pg of pages){const h=hostOf(pg.url);if(!byHost.has(h))byHost.set(h,[]);if(!S.largeMode&&!pg.importError&&(pg.text||'').length<=LIMITS.textChars)byHost.get(h).push(pg);}
     const operatorKeys=new Map();for(const [h,list] of byHost){if(version!==analysisVersion)return;operatorKeys.set(h,classifyAccountKeys(mode?list.filter(pg=>!isStaticAsset(pg.url,pg.text)):list));await yieldUI();}
     for(let i=0;i<pages.length;i++){
       if(version!==analysisVersion)return;
-      all.push(...scanAll({pages:[pages[i]],skipAssets:mode,custom:S.custom,operatorKeys,diagnostics}));
+      processed=i;let full;
+      try{full=await hydratePage(pages[i]);}catch(e){const reason='원문 재검사 실패: '+e.message;pages[i].analysis={state:'failed',reasons:[reason]};diagnostics.push({reason});continue;}
+      const hits=scanAll({pages:[full],skipAssets:mode,custom:S.custom,operatorKeys,diagnostics});
+      const remaining=Math.max(0,LIMITS.totalFindings-all.length);let kept=0;
+      for(const hit of hits.slice(0,remaining)){const chars=JSON.stringify(hit).length;if(usedChars+chars>LIMITS.resultChars)break;usedChars+=chars;all.push(hit);kept++;}
+      if(hits.length>kept){const reason='프로젝트 탐지 250,000건/결과 64Mi 문자 제한: 일부 결과 미저장';full.analysis.state='partial';full.analysis.reasons.push(reason);diagnostics.push({reason});}
+      pages[i].analysis=full.analysis;
       scanStatus(`응답 분석 중 ${i+1}/${pages.length}`);await yieldUI();
     }
     if(version!==analysisVersion)return;
-    const result={mode,all,diagnostics,analyses:pages.map(p=>p.analysis)};store.set(mode,result);applyAnalysis(result);
-  }catch(e){if(version===analysisVersion)scanStatus('분석 중단: '+e.message+' · 미분석 항목을 확인하세요.');throw e;}
-  finally{if(version===analysisVersion){analysisBusy=false;scanStatus('');}}
+    const result={mode,all,diagnostics,analyses:pages.map(p=>p.analysis)};if(S.largeMode)store.clear();store.set(mode,result);applyAnalysis(result);
+  }catch(e){if(version===analysisVersion){failureMessage='분석 중단: '+e.message;
+    for(let i=processed;i<pages.length;i++)pages[i].analysis={state:'failed',reasons:[failureMessage]};
+    S.findings=all;S.diagnostics=diagnostics;S.importFailures.push({stage:'analysis',reason:failureMessage});renderCoverage();msg(failureMessage);
+  }}
+  finally{if(version===analysisVersion){analysisBusy=false;scanStatus(failureMessage);}}
 }
-async function toggleAssets(enabled){S.skipAssets=!!enabled;$('#skipAssetChk').checked=S.skipAssets;await rescan();}
+async function toggleAssets(enabled){if(S.largeMode)clearSearchCache();S.skipAssets=!!enabled;$('#skipAssetChk').checked=S.skipAssets;await rescan();if(S.largeMode&&S.q)await updateSearch();}
 
 function toggleOperator(enabled){
+  if(S.largeMode&&enabled){$("#operatorChk").checked=false;showToast("대용량 모드에서는 관리자 ID 통계 추정을 사용하지 않습니다.");return;}
   S.operatorInference=!!enabled;$("#operatorChk").checked=S.operatorInference;
   const base=S.findings.filter(f=>f.type!=="operator");
   S.findings=S.operatorInference?base.concat(S.operatorFindings):base;
@@ -1440,11 +1482,11 @@ async function loadPages(incoming,sample=false,fileCount=0){
   const generation=loadGeneration;preparing=true;
   try{
     const replace=sample||S.isSample||!S.pages.length,existing=replace?[]:S.pages;
-    if(existing.length+incoming.length>LIMITS.items)throw new Error('거래 20,000건 한도 초과: 프로젝트를 나누어 검사하세요. 입력은 추가하지 않았습니다.');
+    if(existing.length+incoming.length>LIMITS.items)throw new Error('거래 250,000건 한도를 초과했습니다.');
     await preparePages(incoming,()=>generation!==loadGeneration);
     if(generation!==loadGeneration)throw new Error('불러오기를 취소했습니다.');
     const totalChars=[...existing,...incoming].reduce((n,p)=>n+(p.text||'').length+(p.rawResponseBase64||'').length+(p.originalResponseBase64||'').length+(p.request||'').length,0);
-    if(totalChars>LIMITS.totalChars)throw new Error('누적 자료 문자 한도 75Mi 초과: 별도 프로젝트로 검사하세요. 입력은 추가하지 않았습니다.');
+    if(totalChars>LIMITS.totalChars&&!S.largeMode)await enableLargeMode();if(S.largeMode)for(const pg of incoming)if(!pg.payloadKey)await storePagePayload(pg);
     cancelAnalysis();clearSearchCache();closeDetail(false);
     if(replace){S.reviews.clear();S.fileCount=0;S.hostState.clear();S.pageState.clear();}
     for(const page of incoming)rememberOrigins(page,page);
@@ -1468,7 +1510,7 @@ document.querySelectorAll("[data-view]").forEach(b=>b.addEventListener("click",(
 $("#dMaskChk").addEventListener("change",e=>{if(!e.target.checked&&!confirm("응답 원문에는 개인정보와 인증정보가 포함될 수 있습니다. 마스킹을 해제할까요?")){e.target.checked=true;return;}D.mask=e.target.checked;renderDrawer(false);});
 $("#dClose").addEventListener("click",()=>closeDetail());$("#dBackdrop").addEventListener("click",()=>closeDetail());
 $("#dCopyUrl").addEventListener("click",e=>{if(D.it&&confirm("마스킹되지 않은 요청 URL을 클립보드에 복사할까요? 쿼리에 개인정보와 토큰이 포함될 수 있습니다."))copy(S.pages[D.pi].url,e.currentTarget);});
-$("#dCopyResp").addEventListener("click",e=>{if(D.it&&confirm("마스킹되지 않은 응답 원문을 클립보드에 복사할까요? 개인정보와 인증정보가 포함될 수 있습니다."))copy(S.pages[D.pi].text||"",e.currentTarget);});
+$("#dCopyResp").addEventListener("click",e=>{if(D.it&&confirm("마스킹되지 않은 응답 원문을 클립보드에 복사할까요? 개인정보와 인증정보가 포함될 수 있습니다."))copy(D.responseText||"",e.currentTarget);});
 document.addEventListener("keydown",e=>{if(!D.it)return;if(e.key==="Escape"){e.preventDefault();closeDetail();}else if(e.key==="Tab"){const nodes=[...$("#drawer").querySelectorAll('button:not([disabled]),[tabindex="0"]')].filter(n=>n.getClientRects().length);if(!nodes.length)return;const i=nodes.indexOf(document.activeElement);if(e.shiftKey&&(i<=0)){e.preventDefault();nodes.at(-1).focus();}else if(!e.shiftKey&&(i<0||i===nodes.length-1)){e.preventDefault();nodes[0].focus();}}});
 let t=null;
 $("#q").addEventListener("input",()=>{clearTimeout(t);$("#searchClear").hidden=!$("#q").value;t=setTimeout(updateSearch,180);});
@@ -1497,40 +1539,38 @@ function fileText(file){return new Promise((resolve,reject)=>{
 });}
 async function readFiles(fileList){
   const files=Array.from(fileList||[]);if(!files.length||reading||preparing)return;
-  if(files.reduce((n,f)=>n+f.size,0)>50*1024*1024){S.importFailures.push({reason:'선택 파일 합계 50MiB 초과',count:files.length});setFileStatus('선택 파일 합계 50MiB 한도 초과: 나누어 불러오세요. 선택 파일은 미분석입니다.');renderCoverage();return;}
-  const generation=++loadGeneration;cancelAnalysis(true);reading=true;closeDetail(false);msg("");
-  for(const id of ["#file","#loadPaste","#sampleBtn","#paste"])$(id).disabled=true;
-  $("#bar").inert=true;
-  const pages=[],failures=[],warnings=[];let loaded=0;
+  if(files.reduce((n,f)=>n+f.size,0)>LIMITS.selectedBytes){S.importFailures.push({reason:'선택 파일 합계 1GiB 초과',count:files.length});setFileStatus('선택 파일 합계 1GiB 한도 초과입니다.');renderCoverage();return;}
+  const generation=++loadGeneration;cancelAnalysis(true);reading=true;closeDetail(false);msg('');
+  for(const id of ['#file','#loadPaste','#sampleBtn','#paste'])$(id).disabled=true;$('#bar').inert=true;
+  const pages=[],failures=[];let loaded=0;
   try{
+    if(files.some(f=>f.size>LIMITS.smallFileBytes&&f.size<=LIMITS.fileBytes))await enableLargeMode();
     for(let i=0;i<files.length;i++){
-      if(generation!==loadGeneration)return;
-      const file=files[i];setFileStatus(`파일 ${i+1}/${files.length} 읽는 중 · ${file.name}`);
+      if(generation!==loadGeneration)return;const file=files[i];setFileStatus(`파일 ${i+1}/${files.length} 읽는 중 · ${file.name}`);
       try{
-        if(file.size>LIMITS.fileBytes)throw new Error('파일 25MiB 한도 초과: 나누어 내보내세요.');
-        const {text,hash}=await fileText(file);if(generation!==loadGeneration)return;
-        const parsed=toPages(text,file.name);
-        if(!parsed.length)throw new Error("분석할 항목을 찾지 못했습니다.");
-        const sourceId=++S.sourceSequence;parsed.forEach((page,j)=>{page.fileName=file.name;page.sourceHash=hash;page.fileItem=j+1;page.sourceId=sourceId;pages.push(page);});loaded++;
-        if(!parsed.some(p=>p.text||p.rawResponseBase64!=null||p.harBodyBase64!=null))warnings.push(file.name+": 응답 본문이 없습니다.");
-      }catch(e){if(generation!==loadGeneration)return;failures.push(file.name+": "+(e.message||"파일 처리 실패"));S.importFailures.push({fileName:file.name,reason:e.message||"파일 처리 실패"});}
+        if(file.size>LIMITS.fileBytes)throw new Error('파일당 500MiB 한도 초과입니다.');
+        const prefix=new TextDecoder().decode(await file.slice(0,4096).arrayBuffer());
+        const xml=/\.xml$/i.test(file.name)||/^\s*(?:\uFEFF)?<(?:\?xml|items\b|!DOCTYPE\s+items)/i.test(prefix);
+        if(file.size>LIMITS.smallFileBytes&&xml){
+          const result=await importLargeBurpFile(file,generation);for(const pg of result.pages)pages.push(pg);loaded++;
+          if(result.error){failures.push(file.name+': '+result.error);S.importFailures.push({fileName:file.name,reason:result.error,fullyRead:false});}
+        }else{
+          if(file.size>LIMITS.nonXmlBytes)throw new Error('JSON/HAR/텍스트 한도는 100MiB입니다. 500MiB 가져오기는 Burp XML을 사용하세요.');
+          const {text,hash}=await fileText(file);if(generation!==loadGeneration)return;
+          const parsed=toPages(text,file.name);if(!parsed.length)throw new Error('분석할 항목이 없습니다.');
+          const sourceId=++S.sourceSequence;
+          for(let j=0;j<parsed.length;j++){const pg=parsed[j];pg.fileName=file.name;pg.sourceHash=hash;pg.fileItem=j+1;pg.sourceId=sourceId;}
+          if(S.largeMode){await preparePages(parsed,()=>generation!==loadGeneration);for(const pg of parsed)await storePagePayload(pg);}
+          for(const pg of parsed)pages.push(pg);S.sources.push({name:file.name,bytes:file.size,sha256:hash,fullyRead:true,items:parsed.length});loaded++;
+        }
+      }catch(e){if(generation!==loadGeneration)return;failures.push(file.name+': '+e.message);S.importFailures.push({fileName:file.name,reason:e.message,fullyRead:false});}
     }
-    if(!loaded){
-      renderCoverage();setFileStatus("선택한 파일을 불러오지 못했습니다."+(S.pages.length?" 기존 분석 결과는 유지됩니다.":"")+"\n"+failures.join("\n"));return;
-    }
-    setFileStatus(`파일 ${loaded}개 · 응답 항목 ${pages.length}개 통합 분석 중…`);
-    await new Promise(resolve=>setTimeout(resolve,30));
     if(generation!==loadGeneration)return;
-    const report=await loadPages(pages,false,loaded);
-    const notes=[`파일 ${loaded}/${files.length}개 처리 완료 · 새 응답 ${report.added}개 추가 · 원거래 전체 보존`,`누적 ${report.files}개 파일 · ${report.total}개 응답 · ${report.hosts}개 호스트`];
-    if(failures.length)notes.push(`제외된 파일 ${failures.length}개`,...failures);
-    if(warnings.length)notes.push("확인 필요",...warnings);
-    setFileStatus(notes.join("\n"));
-  }catch(e){if(generation===loadGeneration){S.importFailures.push({reason:e.message,stage:"append"});setFileStatus("통합 분석 실패: "+e.message);renderCoverage();}}
-  finally{
-    if(generation===loadGeneration){reading=false;for(const id of ["#file","#loadPaste","#sampleBtn","#paste"])$(id).disabled=false;
-    $("#bar").inert=false;$("#file").value="";}
-  }
+    if(!loaded){renderCoverage();setFileStatus('파일 가져오기 실패\n'+failures.join('\n'));return;}
+    const report=await loadPages(pages,false,loaded);if(generation!==loadGeneration)return;
+    setFileStatus(`파일 ${loaded}/${files.length}개 · 원거래 ${report.added}개 추가 · 누적 ${report.total}개`+(S.largeMode?' · 대용량 임시저장 모드':'')+(failures.length?'\n미완료 파일\n'+failures.join('\n'):''));
+  }catch(e){if(generation===loadGeneration){S.importFailures.push({reason:e.message,stage:'append'});setFileStatus('가져오기 중단: '+e.message);renderCoverage();}}
+  finally{if(generation===loadGeneration){reading=false;for(const id of ['#file','#loadPaste','#sampleBtn','#paste'])$(id).disabled=false;$('#bar').inert=false;$('#file').value='';}}
 }
 function goHome(){
   pageKeyCache=new WeakMap();
@@ -1539,7 +1579,7 @@ function goHome(){
   ++loadGeneration;const reader=activeFileReader;activeFileReader=null;
   if(reader&&reader.readyState===FileReader.LOADING)reader.abort();
   reading=false;clearTimeout(t);t=null;clearTimeout(showToast._t);
-  closeDetail(false);Object.assign(S,initialState());
+  closeDetail(false);clearPayloadStore().catch(e=>setFileStatus(e.message));Object.assign(S,initialState());
   Object.assign(D,{it:null,k:0,pi:-1,raw:"",start:-1,end:-1,from:0,to:0,returnFocus:null,returnIndex:0,mask:false,isURL:false});
   for(const id of ["#q","#keyInput","#paste","#file"])$(id).value="";
   for(const id of ["#file","#loadPaste","#sampleBtn","#paste"])$(id).disabled=false;
@@ -1596,7 +1636,7 @@ function coverageData(){
     const state=Object.hasOwn(counts,pg.analysis?.state)?pg.analysis.state:'unknown';counts[state]++;
     return {index:i+1,status:pg.status==null?null:Number.isInteger(Number(pg.status))?Number(pg.status):null,method:pg.method||'',state,responseHash:/^[0-9a-f]{64}$/.test(pg.responseHash||'')?pg.responseHash:null,analysisHash:/^[0-9a-f]{64}$/.test(pg.analysisHash||'')?pg.analysisHash:null,sourceHash:/^[0-9a-f]{64}$/.test(pg.sourceHash||'')?pg.sourceHash:null,reasons:(pg.analysis?.reasons||[]).map(String)};
   });
-  return {total:S.pages.length,counts,responses,failedFiles:S.importFailures.length,
+  return {total:S.pages.length,counts,responses,failedFiles:S.importFailures.length,sources:S.sources.map(x=>({bytes:x.bytes,sha256:x.sha256||null,fullyRead:x.fullyRead,items:x.items})),largeMode:S.largeMode,
     note:'분석 완료는 구현된 탐지 규칙 실행 완료를 뜻하며 개인정보 부재나 취약점 안전 판정을 뜻하지 않습니다.'};
 }
 function renderCoverage(){
@@ -1619,17 +1659,18 @@ function downloadLocalJSON(filename,data){
   const url=URL.createObjectURL(blob),a=el('a');a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 function projectSnapshot(){
+  if(S.pages.some(p=>p.payloadKey))throw new Error('대용량 프로젝트는 프로젝트 저장 버튼의 JSONL 형식을 사용하세요.');
   return {kind:PROJECT_KIND,version:PROJECT_VERSION,toolVersion:TOOL_VERSION,createdAt:new Date().toISOString(),
     warning:'개인정보·인증정보를 포함할 수 있는 평문 원문 프로젝트입니다. 승인된 저장소에 보호하여 보관하세요.',
     pages:S.pages.map(pg=>({...pg})),settings:currentProjectSettings(),reviews:[...S.reviews],
-    fileCount:S.fileCount,sourceSequence:S.sourceSequence,importFailures:S.importFailures,coverage:coverageData()};
+    fileCount:S.fileCount,sourceSequence:S.sourceSequence,importFailures:S.importFailures,sources:S.sources,coverage:coverageData()};
 }
 function forcedMask(type,value){const previous=S.mask;try{S.mask=true;return maskVal(type,String(value??''));}finally{S.mask=previous;}}
 function maskedReport(){
-  const reviews={true:0,pending:0,false:0};
+  const reviews={true:0,pending:0,false:0},sourceNames=[...new Set(S.pages.map(p=>p.fileName||''))];
   const findings=S.findings.map(f=>{const pg=S.pages[f.pi]||{},review=S.reviews.get(reviewKey(f))||defaultReviewStatus(f);if(Object.hasOwn(reviews,review))reviews[review]++;
     return {responseIndex:f.pi+1,type:f.type,label:f.label,maskedValue:forcedMask(f.type,f.value),url:maskURL(pg.url||f.url),
-      status:pg.status==null?null:Number.isInteger(Number(pg.status))?Number(pg.status):null,method:/^[A-Z]{1,16}$/.test(pg.method||'')?pg.method:'',sourceFileIndex:[...new Set(S.pages.map(p=>p.fileName||''))].indexOf(pg.fileName||'')+1,sourceFileItem:Number.isInteger(pg.fileItem)?pg.fileItem:null,source:f.source,tier:f.tier,verified:f.verified??null,
+      status:pg.status==null?null:Number.isInteger(Number(pg.status))?Number(pg.status):null,method:/^[A-Z]{1,16}$/.test(pg.method||'')?pg.method:'',sourceFileIndex:sourceNames.indexOf(pg.fileName||'')+1,sourceFileItem:Number.isInteger(pg.fileItem)?pg.fileItem:null,source:f.source,tier:f.tier,verified:f.verified??null,
       review:REVIEW_LABELS[review]||'확인 필요',start:Number.isInteger(f.start)?f.start:null,end:Number.isInteger(f.end)?f.end:null};});
   const coverage=coverageData();
   // Keep locations and counts useful without copying raw fields, context, headers, requests or bodies.
@@ -1641,7 +1682,7 @@ function maskedReport(){
 }
 function validateProject(data){
   if(!data||data.kind!==PROJECT_KIND||data.version!==PROJECT_VERSION||!Array.isArray(data.pages))throw new Error('지원하는 프로젝트 JSON 형식이 아닙니다.');
-  if(data.pages.length>LIMITS.items)throw new Error('프로젝트 응답 20,000건 한도를 초과했습니다.');
+  if(data.pages.length>LIMITS.items)throw new Error('프로젝트 응답 250,000건 한도를 초과했습니다.');
   for(const pg of data.pages)if(!pg||typeof pg.url!=='string'||typeof pg.text!=='string')throw new Error('프로젝트 응답 항목이 올바르지 않습니다.');
   if(data.reviews!==undefined&&(!Array.isArray(data.reviews)||data.reviews.some(r=>!Array.isArray(r)||r.length!==2||typeof r[0]!=='string'||!['true','pending','false'].includes(r[1]))))throw new Error('프로젝트 검토 판정 형식이 올바르지 않습니다.');
   return data;
@@ -1666,24 +1707,380 @@ async function restoreProject(data){
   await loadPages(pages,false,Number.isInteger(data.fileCount)?Math.max(0,data.fileCount):0);
   S.fileCount=Number.isInteger(data.fileCount)?Math.max(0,data.fileCount):0;
   S.sourceSequence=Number.isInteger(data.sourceSequence)?Math.max(0,data.sourceSequence):0;S.importFailures=Array.isArray(data.importFailures)?data.importFailures:[];
-  restoreProjectSettings(data.settings);
+  S.sources=Array.isArray(data.sources)?data.sources:[];restoreProjectSettings(data.settings);
   await rescan();
   S.reviews=new Map(data.reviews||[]);refreshResults();setFileStatus('프로젝트 복원 완료 · 응답 '+S.pages.length+'개 · 저장된 검토 판정 '+S.reviews.size+'개');
   return true;
 }
 $('#statusFilter').addEventListener('change',e=>{S.statusFilter=e.target.value;closeDetail(false);render();});
-$('#saveProject').addEventListener('click',()=>{
+$('#saveProject').addEventListener('click',async()=>{
   if(!S.pages.length){showToast('저장할 응답이 없습니다.');return;}
   if(reading||analysisBusy||preparing){showToast('분석이 끝난 후 저장하세요.');return;}
-  if(confirm('응답 원문·요청·개인정보·인증정보·검토 판정을 암호화되지 않은 JSON으로 이 PC에 저장합니다. 기관의 보관 정책에 맞는 위치에 저장할까요?'))downloadLocalJSON('pii-review-project.json',projectSnapshot());
+  if(confirm('응답 원문·요청·개인정보·인증정보·검토 판정을 암호화되지 않은 JSON으로 이 PC에 저장합니다. 기관의 보관 정책에 맞는 위치에 저장할까요?')){try{if(S.largeMode)await downloadLargeProject();else downloadLocalJSON('pii-review-project.json',projectSnapshot());}catch(e){setFileStatus('프로젝트 저장 실패: '+e.message);}}
 });
 $('#saveReport').addEventListener('click',()=>{if(!S.pages.length&&!S.importFailures.length){showToast('저장할 응답이 없습니다.');return;}if(reading||analysisBusy||preparing){showToast('분석이 끝난 후 저장하세요.');return;}downloadLocalJSON('pii-review-masked-report.json',maskedReport());});
 $('#loadProject').addEventListener('click',()=>$('#projectInput').click());
 $('#projectInput').addEventListener('change',async e=>{
   const file=e.target.files?.[0];e.target.value='';if(!file)return;
-  try{if(file.size>100*1024*1024)throw new Error('프로젝트 파일은 100 MiB 이하로 나누세요.');const data=validateProject(JSON.parse(await file.text()));await restoreProject(data);}catch(error){setFileStatus('프로젝트 복원 실패: '+error.message);}
+  try{if(/\.(?:jsonl|ndjson)$/i.test(file.name)){await restoreLargeProjectFile(file);return;}if(file.size>100*1024*1024)throw new Error('프로젝트 파일은 100 MiB 이하로 나누세요.');const data=validateProject(JSON.parse(await file.text()));await restoreProject(data);}catch(error){setFileStatus('프로젝트 복원 실패: '+error.message);}
+});
+/* BEGIN LARGE FILE SUPPORT (generated by build_detector.py) */
+/* IndexedDB payload helpers, inserted inside the detector IIFE by its build step.
+ * No database is opened until an explicit store/hydrate call. Raw data is local,
+ * plaintext browser storage: the UI must disclose retention and offer deletion.
+ */
+const PAYLOAD_DB_NAME='pii-review-payloads-v2.1';
+const PAYLOAD_STORE_NAME='payloads';
+const PAYLOAD_FIELDS=Object.freeze(['text','rawResponseBase64','originalResponseBase64','request','harBodyBase64','harHead','originalHeaders']);
+const PAYLOAD_SESSION_ID=globalThis.crypto?.randomUUID?.()||('session-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2));
+const PAYLOAD_SESSION_PREFIX=PAYLOAD_SESSION_ID+':';
+let payloadDatabasePromise=null,payloadDatabase=null,payloadStoreUsed=false;
+let payloadOperationTail=Promise.resolve(),payloadEpoch=0,payloadSequence=0;
+class PayloadStorageError extends Error {
+  constructor(message,code='storage'){super(message);this.name='PayloadStorageError';this.code=code;}
+}
+function payloadError(error,operation){
+  if(error instanceof PayloadStorageError)return error;
+  if(error?.name==='QuotaExceededError')return new PayloadStorageError('브라우저 임시저장 공간이 부족합니다. 파일을 나누거나 불필요한 사이트 저장 데이터를 지운 뒤 다시 시도하세요.','quota');
+  if(error?.name==='SecurityError'||error?.name==='InvalidStateError'||error?.name==='NotAllowedError')return new PayloadStorageError('브라우저 정책 또는 개인정보 보호 설정 때문에 임시저장소를 사용할 수 없습니다. 이 사이트의 IndexedDB 허용 여부를 확인하세요.','permission');
+  if(error?.name==='AbortError')return new PayloadStorageError('임시저장 작업이 중단되었습니다. 브라우저 저장 공간과 페이지 상태를 확인한 뒤 다시 불러오세요.','abort');
+  return new PayloadStorageError('브라우저 임시저장소 '+operation+' 작업에 실패했습니다. 원문은 오류 메시지에 포함하지 않았습니다. 파일을 나누거나 다른 지원 브라우저에서 다시 시도하세요.','storage');
+}
+function payloadCancellation(){return new PayloadStorageError('이전 임시저장 작업이 취소되었습니다. 현재 파일 불러오기 상태를 확인하세요.','cancelled');}
+function queuePayloadOperation(operation){
+  const task=payloadOperationTail.then(operation,operation);
+  // Never retain the last hydrated response as a resolved queue value.
+  payloadOperationTail=task.then(()=>undefined,()=>undefined);
+  return task;
+}
+function openPayloadDatabase(){
+  if(payloadDatabasePromise)return payloadDatabasePromise;
+  payloadDatabasePromise=new Promise((resolve,reject)=>{
+    if(!globalThis.indexedDB){reject(new PayloadStorageError('이 브라우저는 IndexedDB 임시저장을 지원하지 않습니다. 대용량 모드를 사용할 수 없습니다.','unsupported'));return;}
+    let request,settled=false;
+    const fail=error=>{if(!settled){settled=true;reject(payloadError(error,'열기'));}};
+    try{request=indexedDB.open(PAYLOAD_DB_NAME,1);}catch(error){fail(error);return;}
+    request.onupgradeneeded=()=>{
+      const database=request.result;
+      if(!database.objectStoreNames.contains(PAYLOAD_STORE_NAME))database.createObjectStore(PAYLOAD_STORE_NAME,{keyPath:'key'});
+    };
+    request.onerror=()=>fail(request.error);
+    request.onblocked=()=>fail(new PayloadStorageError('다른 탭이 이전 임시저장소를 사용하고 있습니다. 관련 탭을 닫은 뒤 다시 시도하세요.','blocked'));
+    request.onsuccess=()=>{
+      const database=request.result;if(settled){database.close();return;}
+      settled=true;payloadDatabase=database;
+      database.onversionchange=()=>{database.close();if(payloadDatabase===database){payloadDatabase=null;payloadDatabasePromise=null;}};
+      database.onclose=()=>{if(payloadDatabase===database){payloadDatabase=null;payloadDatabasePromise=null;}};
+      resolve(database);
+    };
+  }).catch(error=>{payloadDatabasePromise=null;throw payloadError(error,'열기');});
+  return payloadDatabasePromise;
+}
+function payloadTransaction(database,mode,action){
+  return new Promise((resolve,reject)=>{
+    let transaction,result;
+    try{
+      transaction=database.transaction(PAYLOAD_STORE_NAME,mode);
+      transaction.oncomplete=()=>resolve(result);
+      transaction.onerror=()=>{}; // onabort reports the transaction's definitive failure.
+      transaction.onabort=()=>reject(payloadError(transaction.error,'저장/읽기'));
+      action(transaction.objectStore(PAYLOAD_STORE_NAME),value=>{result=value;},transaction);
+    }catch(error){
+      try{transaction?.abort();}catch{}
+      reject(payloadError(error,'저장/읽기'));
+    }
+  });
+}
+async function storePagePayload(pg){
+  if(!pg||typeof pg!=='object')throw new PayloadStorageError('임시저장할 응답 항목이 올바르지 않습니다.','input');
+  const epoch=payloadEpoch;payloadStoreUsed=true;
+  return queuePayloadOperation(async()=>{
+    if(epoch!==payloadEpoch)throw payloadCancellation();
+    const present=PAYLOAD_FIELDS.filter(field=>Object.hasOwn(pg,field));
+    if(!present.length)return pg;
+    const database=await openPayloadDatabase();if(epoch!==payloadEpoch)throw payloadCancellation();
+    const key=typeof pg.payloadKey==='string'&&pg.payloadKey.startsWith(PAYLOAD_SESSION_PREFIX)?pg.payloadKey:PAYLOAD_SESSION_PREFIX+(++payloadSequence);
+    const payload={};for(const field of present)payload[field]=pg[field];
+    const textLength=typeof pg.text==='string'?pg.text.length:Number(pg.textLength)||0;
+    const hasResponse=!!(pg.hasResponse||pg.text||pg.rawResponseBase64!=null||pg.originalResponseBase64!=null||pg.harBodyBase64!=null);
+    try{
+      await payloadTransaction(database,'readwrite',(store)=>{
+        if(pg.payloadKey===key){
+          const previous=store.get(key);previous.onsuccess=()=>{
+            const retained=previous.result?.session===PAYLOAD_SESSION_ID?previous.result.payload:{};
+            store.put({key,session:PAYLOAD_SESSION_ID,payload:{...retained,...payload}});
+          };
+        }else store.put({key,session:PAYLOAD_SESSION_ID,payload});
+      });
+    }catch(error){throw payloadError(error,'저장');}
+    if(epoch!==payloadEpoch)throw payloadCancellation();
+    // Commit first. If quota/policy/write fails, original fields remain available.
+    pg.payloadKey=key;pg.textLength=textLength;pg.hasResponse=hasResponse;
+    for(const field of present)delete pg[field];
+    return pg;
+  });
+}
+async function hydratePage(pg){
+  if(!pg||typeof pg!=='object')throw new PayloadStorageError('불러올 응답 항목이 올바르지 않습니다.','input');
+  if(!pg.payloadKey)return {...pg};
+  const epoch=payloadEpoch,key=pg.payloadKey;
+  if(typeof key!=='string'||!key.startsWith(PAYLOAD_SESSION_PREFIX))throw new PayloadStorageError('이 응답은 현재 임시저장 세션에 속하지 않습니다. 원본 파일 또는 원문 포함 프로젝트를 다시 불러오세요.','session');
+  payloadStoreUsed=true;
+  return queuePayloadOperation(async()=>{
+    if(epoch!==payloadEpoch)throw payloadCancellation();
+    const database=await openPayloadDatabase();if(epoch!==payloadEpoch)throw payloadCancellation();
+    const record=await payloadTransaction(database,'readonly',(store,set)=>{const request=store.get(key);request.onsuccess=()=>set(request.result);});
+    if(epoch!==payloadEpoch)throw payloadCancellation();
+    if(!record?.payload||record.session!==PAYLOAD_SESSION_ID)throw new PayloadStorageError('임시저장된 응답 원문을 찾지 못했습니다. 삭제 또는 저장 공간 회수 여부를 확인하고 원본 파일을 다시 불러오세요.','missing');
+    // Metadata wins over stored fields only outside PAYLOAD_FIELDS. This is a new
+    // object: callers can drop it after one scan/detail view without changing pg.
+    const hydrated={...pg};for(const field of PAYLOAD_FIELDS)if(Object.hasOwn(record.payload,field))hydrated[field]=record.payload[field];
+    return hydrated;
+  });
+}
+async function clearPayloadStore(){
+  // Invalidates already queued/in-flight readers and writers synchronously.
+  ++payloadEpoch;
+  return queuePayloadOperation(async()=>{
+    if(!payloadStoreUsed&&!payloadDatabasePromise)return;
+    const database=await openPayloadDatabase();
+    await payloadTransaction(database,'readwrite',(store)=>{
+      const range=IDBKeyRange.bound(PAYLOAD_SESSION_PREFIX,PAYLOAD_SESSION_PREFIX+'\uffff');
+      store.delete(range);
+    });
+    // Preserve the live DB connection; the serialized queue prevents a close/open
+    // race and fresh operations use the incremented epoch. Other tabs are separate.
+  });
+}
+async function purgeAllPayloadStores(){
+  // Explicit destructive action: removes this dedicated app database's payloads
+  // across sessions, including abandoned rows from reloads/closed tabs. Other
+  // tabs must be closed first; their references cannot survive this operation.
+  ++payloadEpoch;
+  return queuePayloadOperation(async()=>{
+    const database=await openPayloadDatabase();
+    await payloadTransaction(database,'readwrite',store=>{store.clear();});
+  });
+}
+async function estimatePayloadStorage(){
+  try{
+    const estimate=globalThis.navigator?.storage?.estimate?await navigator.storage.estimate():{};
+    const persistent=globalThis.navigator?.storage?.persisted?await navigator.storage.persisted():null;
+    const usage=Number.isFinite(estimate.usage)?estimate.usage:null,quota=Number.isFinite(estimate.quota)?estimate.quota:null;
+    return {available:!!globalThis.indexedDB,usageBytes:usage,quotaBytes:quota,availableBytes:usage!==null&&quota!==null?Math.max(0,quota-usage):null,persistent};
+  }catch(error){throw payloadError(error,'용량 확인');}
+}
+async function requestPersistence(){
+  // Only call from an explicit user action. Merely opening/importing never asks.
+  if(!globalThis.navigator?.storage?.persist)return {supported:false,granted:false};
+  try{return {supported:true,granted:await navigator.storage.persist()};}catch(error){throw payloadError(error,'보관 권한 요청');}
+}
+
+/* Incremental Burp XML input. No network calls and no whole-file buffers. */
+class SHA256Incremental {
+  constructor(){this.h=new Uint32Array([0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19]);this.buffer=new Uint8Array(64);this.used=0;this.bytes=0;this.done=false;this.w=new Uint32Array(64);}
+  update(input){
+    if(this.done)throw new Error('SHA-256 already finalized');
+    const data=input instanceof Uint8Array?input:new Uint8Array(input);this.bytes+=data.length;
+    let i=0;
+    if(this.used){const n=Math.min(64-this.used,data.length);this.buffer.set(data.subarray(0,n),this.used);this.used+=n;i=n;if(this.used===64){this.block(this.buffer,0);this.used=0;}}
+    for(;i+64<=data.length;i+=64)this.block(data,i);
+    if(i<data.length){this.buffer.set(data.subarray(i));this.used=data.length-i;}
+    return this;
+  }
+  block(data,offset){
+    const w=this.w,k=SHA256Incremental.K,r=(v,n)=>(v>>>n)|(v<<(32-n));
+    for(let i=0;i<16;i++){const j=offset+i*4;w[i]=((data[j]<<24)|(data[j+1]<<16)|(data[j+2]<<8)|data[j+3])>>>0;}
+    for(let i=16;i<64;i++){const a=w[i-15],b=w[i-2];w[i]=(w[i-16]+(r(a,7)^r(a,18)^(a>>>3))+w[i-7]+(r(b,17)^r(b,19)^(b>>>10)))>>>0;}
+    let [a,b,c,d,e,f,g,h]=this.h;
+    for(let i=0;i<64;i++){const t1=(h+(r(e,6)^r(e,11)^r(e,25))+((e&f)^(~e&g))+k[i]+w[i])>>>0,t2=((r(a,2)^r(a,13)^r(a,22))+((a&b)^(a&c)^(b&c)))>>>0;h=g;g=f;f=e;e=(d+t1)>>>0;d=c;c=b;b=a;a=(t1+t2)>>>0;}
+    const values=[a,b,c,d,e,f,g,h];for(let i=0;i<8;i++)this.h[i]=(this.h[i]+values[i])>>>0;
+  }
+  digest(){
+    if(!this.done){const n=this.used;this.buffer[n]=0x80;this.buffer.fill(0,n+1);if(n>=56){this.block(this.buffer,0);this.buffer.fill(0);}const hi=Math.floor(this.bytes/0x20000000),lo=(this.bytes*8)>>>0;for(let j=0;j<4;j++){this.buffer[56+j]=(hi>>>(24-j*8))&255;this.buffer[60+j]=(lo>>>(24-j*8))&255;}this.block(this.buffer,0);this.done=true;}
+    return Array.from(this.h,v=>v.toString(16).padStart(8,'0')).join('');
+  }
+}
+SHA256Incremental.K=new Uint32Array([0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2]);
+
+class BurpXMLItemTokenizer {
+  constructor({itemLimit=32*1024*1024,tokenLimit=1024*1024}={}){this.itemLimit=itemLimit;this.tokenLimit=tokenLimit;this.stack=[];this.mode='data';this.token='';this.quote='';this.brackets=0;this.dtdComment=false;this.tail='';this.capture=null;this.itemNumber=0;this.rootSeen=false;this.rootClosed=false;this.dtdSeen=false;this.encoder=new TextEncoder();}
+  fail(message){const error=new Error(message);error.fullyRead=false;error.itemNumber=this.itemNumber;throw error;}
+  append(value){
+    const c=this.capture;if(!c||c.oversized||!value)return;
+    c.bytes+=this.encoder.encode(value).byteLength;
+    if(c.bytes>this.itemLimit){c.oversized=true;c.parts=[];return;}
+    c.parts.push(value);if(c.parts.length>=256)c.parts=[c.parts.join('')];
+  }
+  finishItem(out){const c=this.capture;this.capture=null;out.push(c.oversized?{error:'항목 XML 크기 제한(32MiB): 일부 미분석',itemNumber:this.itemNumber}:{text:c.parts.join(''),itemNumber:this.itemNumber});}
+  tag(raw,out){
+    const close=/^<\/([A-Za-z_:][A-Za-z0-9_.:-]*)\s*>$/.exec(raw);
+    if(close){const name=close[1];if(this.stack.at(-1)!==name)this.fail('XML 종료 태그 불일치');this.append(raw);if(this.stack.length===2&&name==='item')this.finishItem(out);this.stack.pop();if(!this.stack.length)this.rootClosed=true;return;}
+    const start=/^<([A-Za-z_:][A-Za-z0-9_.:-]*)/.exec(raw);if(!start)this.fail('잘못된 XML 시작 태그');
+    const name=start[1],selfClosing=/\/>$/.test(raw),end=raw.length-(selfClosing?2:1);let pos=start[0].length;const attrs=new Set();
+    while(pos<end){const ws=/^\s+/.exec(raw.slice(pos,end));if(!ws)this.fail('XML 속성 구분 오류');pos+=ws[0].length;if(pos===end)break;const attr=/^([A-Za-z_:][A-Za-z0-9_.:-]*)\s*=\s*(["'])([\s\S]*?)\2/.exec(raw.slice(pos,end));if(!attr||attr[3].includes('<')||attrs.has(attr[1]))this.fail('잘못된 XML 속성');attrs.add(attr[1]);pos+=attr[0].length;}
+    if(!this.stack.length){if(this.rootSeen||this.rootClosed||name!=='items')this.fail('Burp items 루트가 필요합니다');this.rootSeen=true;}
+    else if(this.stack.length===1){if(name!=='item')this.fail('items 루트의 직계 요소는 item이어야 합니다');this.itemNumber++;this.capture={parts:[],bytes:0,oversized:false};}
+    this.append(raw);if(!selfClosing){this.stack.push(name);if(this.stack.length>256)this.fail('XML 중첩 깊이 제한(256)');}else if(this.capture&&this.stack.length===1)this.finishItem(out);else if(!this.stack.length)this.rootClosed=true;
+  }
+  feed(text){
+    if(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(text))this.fail('XML에 허용되지 않는 제어 문자');
+    const out=[];let i=0;
+    while(i<text.length){
+      if(this.mode==='data'){
+        const end=text.indexOf('<',i),j=end<0?text.length:end,piece=text.slice(i,j);
+        if(!this.capture&&piece.trim())this.fail('item 바깥의 XML 텍스트');this.append(piece);i=j;if(end<0)break;this.mode='markup';this.token='<';i++;continue;
+      }
+      if(this.mode==='comment'||this.mode==='cdata'){
+        const old=this.tail.length,combined=this.tail+text.slice(i),marker=this.mode==='comment'?'-->':']]>',end=combined.indexOf(marker);
+        if(end>=0){if(this.mode==='comment'&&combined.slice(0,end).includes('--'))this.fail('잘못된 XML 주석');this.append(combined.slice(0,end+3));i+=end+3-old;this.tail='';this.mode='data';continue;}
+        if(this.mode==='comment'&&combined.slice(0,-2).includes('--'))this.fail('잘못된 XML 주석');const keep=Math.min(2,combined.length);this.append(combined.slice(0,combined.length-keep));this.tail=combined.slice(-keep);i=text.length;continue;
+      }
+      const ch=text[i++];this.token+=ch;
+      if(this.token.length>this.tokenLimit)this.fail('XML 태그/선언 크기 제한(1MiB)');
+      if(this.mode==='markup'){
+        if(this.token==='<!--'){this.append(this.token);this.token='';this.mode='comment';this.tail='';continue;}
+        if(this.token==='<![CDATA['){if(!this.capture)this.fail('item 바깥 CDATA');this.append(this.token);this.token='';this.mode='cdata';this.tail='';continue;}
+        if(this.token==='<?'){this.mode='pi';continue;}
+        if(this.token==='<!DOCTYPE'){if(this.rootSeen||this.dtdSeen)this.fail('DOCTYPE 위치 오류');this.mode='doctype';this.quote='';this.brackets=0;this.dtdComment=false;continue;}
+        if(/^<\/?[A-Za-z_:]/.test(this.token)){this.mode='tag';this.quote='';}
+        else if(['<!--','<![CDATA[','<!DOCTYPE','<?','</'].some(p=>p.startsWith(this.token)))continue;
+        else this.fail('지원되지 않는 XML 선언 또는 태그');
+      }
+      if(this.mode==='tag'){
+        if(this.quote){if(ch===this.quote)this.quote='';}
+        else if(ch==='"'||ch==="'")this.quote=ch;
+        else if(ch==='>'){this.tag(this.token,out);this.token='';this.mode='data';}
+      }else if(this.mode==='pi'){
+        if(this.token.endsWith('?>')){this.append(this.token);this.token='';this.mode='data';}
+      }else if(this.mode==='doctype'){
+        if(this.dtdComment){if(this.token.endsWith('-->'))this.dtdComment=false;continue;}
+        if(this.quote){if(ch===this.quote)this.quote='';continue;}
+        if(this.token.endsWith('<!--')){this.dtdComment=true;continue;}
+        if(ch==='"'||ch==="'"){this.quote=ch;continue;}
+        if(ch==='[')this.brackets++;else if(ch===']'){if(--this.brackets<0)this.fail('잘못된 DOCTYPE');}
+        else if(ch==='>'&&this.brackets===0){if(!/^<!DOCTYPE\s+items(?:\s|>)/.test(this.token)||/<!ENTITY\b/.test(this.token))this.fail('사용자 정의 XML ENTITY는 지원하지 않습니다');this.dtdSeen=true;this.token='';this.mode='data';}
+      }
+    }
+    return out;
+  }
+  finish(){if(this.mode!=='data'||this.stack.length||!this.rootSeen||!this.rootClosed||this.capture)this.fail('XML 파일이 끝나기 전에 잘렸거나 루트가 닫히지 않았습니다');return {fullyRead:true,itemNumber:this.itemNumber};}
+}
+
+async function* readBurpItems(file,{isCancelled=()=>false,onProgress=()=>{}}={}){
+  const chunkSize=1024*1024,totalBytes=file.size,hash=new SHA256Incremental();let bytesRead=0,parser=new BurpXMLItemTokenizer();
+  const fail=message=>{const error=new Error(message);error.fullyRead=false;error.bytesRead=bytesRead;error.totalBytes=totalBytes;error.itemNumber=parser.itemNumber;return error;};
+  try{
+    if(!Number.isSafeInteger(totalBytes)||totalBytes<1)throw fail('빈 XML 파일 또는 잘못된 파일 크기');
+    const probe=new Uint8Array(await file.slice(0,Math.min(4096,totalBytes)).arrayBuffer());let charset='utf-8';
+    if(probe[0]===0xff&&probe[1]===0xfe&&probe[2]===0&&probe[3]===0||probe[0]===0&&probe[1]===0&&probe[2]===0xfe&&probe[3]===0xff)throw fail('UTF-32 XML은 지원하지 않습니다');
+    if(probe[0]===0xff&&probe[1]===0xfe||probe[0]===0x3c&&probe[1]===0)charset='utf-16le';
+    else if(probe[0]===0xfe&&probe[1]===0xff||probe[0]===0&&probe[1]===0x3c)charset='utf-16be';
+    else{const declaration=new TextDecoder('ascii').decode(probe).match(/^\s*(?:ï»¿)?<\?xml\b[^>]*encoding\s*=\s*["']([^"']+)["']/i);if(declaration){const label=declaration[1].toLowerCase();if(/^(?:euc-?kr|ks_c_5601-1987|cp949|windows-949)$/.test(label))charset='euc-kr';else if(!/^(?:utf-?8|us-ascii|ascii)$/.test(label))throw fail('지원되지 않는 XML 문자 인코딩');}}
+    const decoder=new TextDecoder(charset,{fatal:true});
+    for(let offset=0;offset<totalBytes;offset+=chunkSize){
+      if(await isCancelled())throw fail('파일 읽기가 취소되었습니다');
+      const chunk=new Uint8Array(await file.slice(offset,Math.min(offset+chunkSize,totalBytes)).arrayBuffer());if(!chunk.length)throw fail('파일 읽기가 예정보다 먼저 끝났습니다');hash.update(chunk);bytesRead+=chunk.length;
+      const items=parser.feed(decoder.decode(chunk,{stream:true}));for(const item of items){if(await isCancelled())throw fail('파일 읽기가 취소되었습니다');yield item;}
+      await onProgress({bytesRead,totalBytes,itemNumber:parser.itemNumber,fullyRead:false,complete:false,charset});
+      await new Promise(resolve=>setTimeout(resolve,0));
+    }
+    for(const item of parser.feed(decoder.decode()))yield item;const metadata={...parser.finish(),bytesRead,totalBytes,complete:true,charset,sha256:hash.digest()};await onProgress(metadata);return metadata;
+  }catch(error){error.fullyRead=false;error.bytesRead=bytesRead;error.totalBytes=totalBytes;error.itemNumber=parser.itemNumber;throw error;}
+}
+
+/* Large-file integration. All raw bytes remain on the local device. */
+async function enableLargeMode(){
+  if(S.largeMode)return;
+  if(!confirm('대용량 파일은 원문을 이 브라우저의 평문 임시 저장소(IndexedDB)에 보관합니다. 탭을 닫거나 새로고침해도 남을 수 있습니다. 승인된 PC에서 사용하고 검토 후 임시 원문 전체 삭제를 실행하세요. 계속할까요?'))throw new Error('대용량 임시 저장을 취소했습니다.');
+  await openPayloadDatabase();S.largeMode=true;S.operatorInference=false;$('#operatorChk').checked=false;
+  for(const pg of S.pages)if(!pg.payloadKey)await storePagePayload(pg);
+}
+async function importLargeBurpFile(file,generation){
+  await enableLargeMode();const pages=[],sourceId=++S.sourceSequence;let metadata={},error='';
+  try{
+    for await(const item of readBurpItems(file,{isCancelled:()=>generation!==loadGeneration,onProgress:m=>{
+      metadata=m;setFileStatus(`${file.name} · ${Math.floor(m.bytesRead/m.totalBytes*100)}% 읽음 · ${m.itemNumber}개 거래 · 1MiB 단위 처리`);
+    }})){
+      if(generation!==loadGeneration)throw new Error('파일 가져오기를 취소했습니다.');
+      if(S.pages.length+pages.length>=LIMITS.items)throw new Error('거래 250,000건 한도 도달: 나머지 파일은 미분석입니다.');
+      let pg;
+      try{if(item.error)throw new Error(item.error);pg=toPages('<items>'+item.text+'</items>',file.name)[0];if(!pg)throw new Error('응답 항목을 읽지 못했습니다.');}
+      catch(e){pg={url:'(읽지 못한 항목)',text:'',importError:'항목 파싱 실패: '+e.message,prepared:true,preparationState:'failed'};}
+      Object.assign(pg,{fileName:file.name,fileItem:item.itemNumber,sourceId,sourceHash:null});
+      await preparePage(pg);pg.analysisHash=await sha256bytes(new TextEncoder().encode(pg.text||''));
+      await storePagePayload(pg);pages.push(pg);
+    }
+    if(!pages.length)throw new Error('Burp XML에 항목이 없습니다.');
+  }catch(e){if(generation!==loadGeneration)throw e;error=e.message;}
+  const fullyRead=metadata.fullyRead===true&&!error,hash=fullyRead?metadata.sha256:null;
+  for(const pg of pages){pg.sourceHash=hash;pg.sourceComplete=fullyRead;}
+  S.sources.push({name:file.name,bytes:file.size,sha256:hash,fullyRead,items:pages.length});
+  if(!pages.length&&error)throw new Error(error);return {pages,error,fullyRead};
+}
+function downloadLocalBlob(filename,blob){
+  const url=URL.createObjectURL(blob),a=el('a');a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+}
+async function largeProjectBlob(){
+  const generation=loadGeneration,parts=[];
+  const append=obj=>parts.push(new Blob([JSON.stringify(obj)+'\n'],{type:'application/x-ndjson'}));
+  append({record:'header',kind:'public-agency-pii-review-stream-project',version:1,toolVersion:TOOL_VERSION,settings:currentProjectSettings(),sources:S.sources,fileCount:S.fileCount,sourceSequence:S.sourceSequence,importFailures:S.importFailures});
+  for(let i=0;i<S.pages.length;i++){
+    if(generation!==loadGeneration)throw new Error('프로젝트 저장을 취소했습니다.');
+    const full=await hydratePage(S.pages[i]);delete full.payloadKey;delete full.textLength;delete full.hasResponse;
+    append({record:'page',page:full});if(i%20===0){scanStatus(`프로젝트 저장 준비 ${i+1}/${S.pages.length}`);await yieldUI();}
+  }
+  for(const [key,value] of S.reviews)append({record:'review',key,value});
+  append({record:'end',pages:S.pages.length,reviews:S.reviews.size});
+  return new Blob(parts,{type:'application/x-ndjson'});
+}
+async function downloadLargeProject(){
+  try{const blob=await largeProjectBlob();downloadLocalBlob('pii-review-project.jsonl',blob);}finally{scanStatus('');}
+}
+async function* readProjectLines(file){
+  const decoder=new TextDecoder('utf-8',{fatal:true});let rest='';
+  for(let offset=0;offset<file.size;offset+=1024*1024){
+    rest+=decoder.decode(await file.slice(offset,offset+1024*1024).arrayBuffer(),{stream:true});let pos;
+    while((pos=rest.indexOf('\n'))>=0){const line=rest.slice(0,pos);rest=rest.slice(pos+1);if(line.trim())yield line;}
+    if(rest.length>40*1024*1024)throw new Error('프로젝트의 한 항목이 40Mi 문자 제한을 초과했습니다.');await yieldUI();
+  }
+  rest+=decoder.decode();if(rest.trim())yield rest;
+}
+async function restoreLargeProjectFile(file){
+  if(reading||analysisBusy||preparing)throw new Error('진행 중인 처리가 끝난 후 불러오세요.');
+  if(file.size>2*1024*1024*1024)throw new Error('대용량 프로젝트 한도 2GiB 초과입니다.');
+  if(!confirm('대용량 프로젝트로 현재 분석과 판정을 교체합니다. 저장하지 않은 데이터는 지워집니다. 계속할까요?'))return;
+  // Validate the header before replacing the current project.
+  const iterator=readProjectLines(file),first=await iterator.next();let header;
+  try{header=JSON.parse(first.value);}catch{throw new Error('프로젝트 헤더 JSON이 올바르지 않습니다.');}
+  if(header.kind!=='public-agency-pii-review-stream-project'||header.version!==1||header.record!=='header')throw new Error('지원하는 대용량 프로젝트가 아닙니다.');
+  goHome();await clearPayloadStore();await enableLargeMode();reading=true;const generation=loadGeneration,pages=[],reviews=new Map();let end=null;
+  try{
+    for await(const line of iterator){
+      if(generation!==loadGeneration)throw new Error('복원을 취소했습니다.');const row=JSON.parse(line);if(end)throw new Error('종료 기록 뒤에 데이터가 있습니다.');
+      if(row.record==='page'){
+        const pg=row.page;if(!pg||typeof pg.url!=='string'||typeof pg.text!=='string')throw new Error('올바르지 않은 프로젝트 응답입니다.');
+        if(pages.length>=LIMITS.items)throw new Error('프로젝트 거래 250,000건 제한입니다.');
+        delete pg.payloadKey;delete pg.prepared;delete pg.analysis;delete pg.importError;delete pg.preparationState;delete pg.responseHash;delete pg.analysisHash;
+        await preparePage(pg);pg.analysisHash=await sha256bytes(new TextEncoder().encode(pg.text||''));await storePagePayload(pg);pages.push(pg);
+      }else if(row.record==='review'){
+        if(typeof row.key!=='string'||!['true','false','pending'].includes(row.value))throw new Error('올바르지 않은 판정 기록입니다.');reviews.set(row.key,row.value);
+      }else if(row.record==='end')end=row;else throw new Error('알 수 없는 프로젝트 기록입니다.');
+    }
+    if(!end||end.pages!==pages.length||end.reviews!==reviews.size)throw new Error('프로젝트가 잘렸거나 개수가 일치하지 않습니다.');
+    await loadPages(pages,false,Math.max(0,Number(header.fileCount)||0));restoreProjectSettings(header.settings);S.operatorInference=false;$('#operatorChk').checked=false;
+    S.sources=Array.isArray(header.sources)?header.sources:[];S.sourceSequence=Math.max(0,Number(header.sourceSequence)||0);S.importFailures=Array.isArray(header.importFailures)?header.importFailures:[];
+    await rescan();S.reviews=reviews;refreshResults();setFileStatus(`대용량 프로젝트 복원 완료 · ${pages.length}개 거래`);
+  }catch(e){if(generation===loadGeneration){S.importFailures.push({reason:'프로젝트 복원 중단: '+e.message});renderCoverage();}throw e;}
+  finally{reading=false;}
+}
+$('#purgePayloads').addEventListener('click',async()=>{
+  if(reading||analysisBusy||preparing){showToast('진행 중인 처리를 먼저 중지하세요.');return;}
+  if(!confirm('현재 프로젝트를 비우고 이 브라우저의 이전 세션을 포함한 임시 원문을 모두 삭제합니다. 다른 검토 탭을 먼저 닫으세요. 필요한 프로젝트를 저장했나요?'))return;
+  goHome();try{await purgeAllPayloadStores();setFileStatus('브라우저 임시 원문 전체 삭제 완료');}catch(e){setFileStatus('임시 원문 삭제 실패: '+e.message);}
 });
 
+/* END LARGE FILE SUPPORT */
 setLoaded(false);
 })();
 </script>
