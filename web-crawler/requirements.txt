@@ -1,0 +1,14 @@
+# 웹 크롤러 필수 패키지 (모두 무료, API 키 불필요)
+#   설치:  pip install -r requirements.txt
+#   그 뒤:  python -m playwright install chromium     <- 브라우저 1회 설치(필수)
+# webapp.py(웹 화면)는 파이썬 표준 라이브러리만 쓰므로 추가 설치가 없습니다.
+
+playwright>=1.45            # 브라우저 자동화 (페이지 열기·응답 캡처·로그인)
+langchain-core>=0.3         # 수집 결과 문서 구조 (crawler.py)
+langchain-text-splitters>=0.3   # 긴 본문 분할 (LLM 추출 사용 시)
+trafilatura>=1.12           # 본문 추출(광고·메뉴 제거). 없어도 동작은 하지만 품질이 떨어짐
+python-dotenv>=1.0          # .env 읽기
+
+# ── 선택: LLM 자동 추출을 쓸 때만 주석을 풀고 설치 ──
+# langchain-anthropic>=0.3   # --llm claude  (Claude API, Pro와 별도 과금)
+# langchain-ollama>=0.2      # --llm ollama  (로컬 LLM, 무료)

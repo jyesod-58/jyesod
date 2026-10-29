@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>웹 크롤러</title>
+<style>
+:root{
+  --bg:#f3f5f8; --surface:#fff; --raise:#e9edf3; --line:#dce2ea;
+  --fg:#18202c; --muted:#5b6678; --faint:#8791a1;
+  --accent:#2457d6; --accent-soft:#e2eafb; --on-accent:#fff;
+  --ok:#15803d; --warn:#c2410c; --flag:#b42318;
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:'Noto Sans KR',system-ui,-apple-system,'Segoe UI','Malgun Gothic',sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0e131a;--surface:#151c26;--raise:#1e2733;--line:#273243;--fg:#e5eaf1;
+  --muted:#98a4b6;--faint:#6c778a;--accent:#7ea4ff;--accent-soft:#1d2b4a;--on-accent:#0e131a;
+  --ok:#6ee7a1;--warn:#fb923c;--flag:#ff8f84;color-scheme:dark;}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.55 var(--sans)}
+.wrap{max-width:1040px;margin:0 auto;padding:24px 18px 60px}
+header h1{margin:0;font:600 20px/1.3 var(--mono);letter-spacing:-.01em}
+header p{margin:6px 0 0;color:var(--muted);font-size:13px}
+.grid{display:grid;grid-template-columns:1.1fr .9fr;gap:18px;margin-top:20px}
+@media (max-width:860px){.grid{grid-template-columns:1fr}}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.card h2{margin:0 0 12px;font-size:14px;color:var(--muted);font-weight:600;letter-spacing:.02em}
+label{display:block;font-size:12.5px;color:var(--muted);margin:10px 0 4px}
+input[type=text],input[type=password],input[type=number],textarea,select{
+  width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;
+  background:var(--bg);color:var(--fg);font:400 13px var(--mono)}
+textarea{min-height:76px;resize:vertical}
+input:focus,textarea:focus{outline:none;border-color:var(--accent)}
+.row{display:flex;gap:10px}.row>*{flex:1}
+.checks{display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:10px}
+.chk{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--fg);cursor:pointer}
+.chk input{width:15px;height:15px;accent-color:var(--accent)}
+details.adv{margin-top:14px;border-top:1px solid var(--line);padding-top:4px}
+details.adv>summary{cursor:pointer;font-size:12.5px;color:var(--accent);padding:8px 0;list-style:none}
+details.adv>summary::-webkit-details-marker{display:none}
+details.adv>summary::before{content:"▸ ";font-family:var(--mono)}
+details.adv[open]>summary::before{content:"▾ "}
+.btn{height:40px;padding:0 18px;border:1px solid var(--accent);border-radius:9px;
+  background:var(--accent);color:var(--on-accent);font:600 14px var(--sans);cursor:pointer}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+.btn.ghost{background:var(--surface);color:var(--fg);border-color:var(--line)}
+.btn.done{background:var(--ok);border-color:var(--ok)}
+.btn.stop{background:var(--flag);border-color:var(--flag)}
+table.help{width:100%;border-collapse:collapse;margin-top:8px;font-size:12px}
+table.help th{text-align:left;white-space:nowrap;vertical-align:top;padding:6px 10px 6px 0;color:var(--fg);width:92px;font-weight:600}
+table.help td{padding:6px 0;color:var(--muted);border-top:1px solid var(--line)}
+table.help tr:first-child td,table.help tr:first-child th{border-top:0}
+.spd{display:inline-block;background:var(--accent-soft);color:var(--accent);font-size:10px;
+  padding:0 6px;border-radius:9px;margin-left:4px;vertical-align:middle;font-weight:700}
+.prog{margin:0 0 12px}
+.prog-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+.prog-phase{font-size:13px;font-weight:600;color:var(--fg)}
+.prog-pct{font:600 20px var(--mono);color:var(--accent);font-variant-numeric:tabular-nums}
+.prog .bar{height:12px;border-radius:7px;background:var(--raise);border:1px solid var(--line);overflow:hidden}
+.prog .fill{height:100%;width:0;background:var(--accent);border-radius:7px;transition:width .35s ease}
+.prog.done .fill{background:var(--ok)}.prog.done .prog-pct{color:var(--ok)}
+.prog.stopped .fill{background:var(--warn)}.prog.stopped .prog-pct{color:var(--warn)}
+.prog.error .fill{background:var(--flag)}.prog.error .prog-pct{color:var(--flag)}
+.prog.wait .fill{background:var(--warn);width:100%!important;opacity:.35;animation:pulse 1s infinite}
+.prog-sub{margin-top:6px;font-size:11.5px;color:var(--muted)}
+.rng{font:400 10.5px var(--mono);color:var(--faint);margin-left:4px}
+table.help th:first-child{width:92px}
+.rc{font-size:11px;color:var(--ok)}
+.detwrap{margin-top:18px}
+.detwrap .card{padding:0;overflow:hidden}
+.dethead{display:flex;align-items:center;gap:10px;padding:14px 18px;flex-wrap:wrap}
+.dethead h2{margin:0}
+.dethead .hint{font-size:12px;color:var(--muted);margin:0}
+.dethead .btn{height:34px;font-size:12.5px;margin-left:auto}
+#detFrame{width:100%;height:1100px;border:0;border-top:1px solid var(--line);display:block;background:var(--surface)}
+.actions{display:flex;gap:10px;align-items:center;margin-top:16px;flex-wrap:wrap}
+.state{font-size:12.5px;color:var(--muted)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--faint);margin-right:6px;vertical-align:middle}
+.state.run .dot{background:var(--accent);animation:pulse 1s infinite}
+.state.done .dot{background:var(--ok)}.state.err .dot{background:var(--flag)}
+.state.wait .dot{background:var(--warn);animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.35}}
+pre.log{margin:0;height:300px;overflow:auto;background:#11161f;color:#e7ecf3;border-radius:8px;
+  padding:12px 14px;font:400 12px/1.6 var(--mono);white-space:pre-wrap;word-break:break-all}
+.files{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.file{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  border:1px solid var(--line);border-radius:8px;padding:9px 12px;font-size:12.5px}
+.file .nm{font-family:var(--mono)}.file .nm b{color:var(--accent)}
+.file a{color:var(--on-accent);background:var(--accent);text-decoration:none;
+  padding:5px 12px;border-radius:7px;font-size:12px;white-space:nowrap}
+.note{border-left:4px solid var(--accent);background:var(--accent-soft);padding:9px 12px;
+  border-radius:0 8px 8px 0;font-size:12px;margin-top:12px}
+.warn{border-left:4px solid var(--warn);background:color-mix(in srgb,var(--warn) 12%,transparent);
+  padding:9px 12px;border-radius:0 8px 8px 0;font-size:12px;margin:12px 0 0}
+.manual{display:none;border:1px solid var(--warn);background:color-mix(in srgb,var(--warn) 10%,transparent);
+  border-radius:10px;padding:12px 14px;margin-top:12px}
+.manual.show{display:block}
+.hintlink{color:var(--accent);text-decoration:none}
+.clearbox{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}
+.clearbox h2{margin-bottom:8px}
+.clearbox .btns{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.btn.sm{height:34px;padding:0 14px;font-size:12.5px}
+.btn.danger{background:var(--surface);color:var(--flag);border-color:var(--flag)}
+.btn.danger.armed{background:var(--flag);color:var(--on-accent)}
+.clearinfo{font-size:12px;color:var(--muted);margin-top:8px}
+.clearmsg{font-size:12px;color:var(--ok);margin-top:6px;min-height:1em}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>웹 크롤러</h1>
+    <p>URL과 로그인 정보를 넣고 수집하면 요청·응답 원문(<b>burp_history.xml</b>)을 만들어 줍니다.
+       모든 처리는 이 PC 안에서만 이뤄집니다. · <a class="hintlink" href="#" id="detectorHint">결과는 민감정보 탐지기에 올려 점검</a></p>
+  </header>
+
+  <div class="grid">
+    <!-- 입력 -->
+    <section class="card">
+      <h2>수집 설정</h2>
+      <label for="urls">시작 URL (한 줄에 하나)</label>
+      <textarea id="urls" placeholder="https://example.com&#10;https://example.com/login"></textarea>
+
+      <div class="row">
+        <div><label for="depth">깊이(depth) <span class="rng">0~10</span></label>
+          <input type="number" id="depth" value="2" min="0" max="10" step="1" data-min="0" data-max="10"></div>
+        <div><label for="max_pages">최대 페이지 <span class="rng">1~2000</span></label>
+          <input type="number" id="max_pages" value="100" min="1" max="2000" step="1" data-min="1" data-max="2000"></div>
+        <div><label for="concurrency">동시 접속 <span class="rng">1~10</span></label>
+          <input type="number" id="concurrency" value="2" min="1" max="10" step="1" data-min="1" data-max="10"></div>
+        <div><label for="delay">간격(초) <span class="rng">0~60</span></label>
+          <input type="number" id="delay" value="1" min="0" max="60" step="0.5" data-min="0" data-max="60"></div>
+      </div>
+
+      <details class="adv" id="optHelp">
+        <summary>옵션 설명 (범위 · 권장값)</summary>
+        <table class="help">
+          <tr><th>옵션</th><th style="width:90px">범위 (권장)</th><th>설명</th></tr>
+          <tr><td>깊이(depth)</td><td><b>0 ~ 10</b><br><span class="rc">권장 1~2</span></td>
+            <td>시작 주소에서 링크를 몇 단계까지 따라갈지. <b>0</b>=시작 주소만, <b>1</b>=그 페이지의 링크까지,
+            <b>2</b>=두 단계까지. 숫자가 커질수록 깊이 들어가지만 페이지 수가 급격히 늘어납니다.</td></tr>
+          <tr><td>최대 페이지</td><td><b>1 ~ 2000</b><br><span class="rc">권장 50~100</span></td>
+            <td>전체 수집 상한. 깊이가 깊어도 이 수에 도달하면 멈춥니다. 사이트가 커서 끝없이 늘어나는 것을 막는 안전장치.
+            적게 시작해 부족하면 늘리세요.</td></tr>
+          <tr><td>동시 접속 <span class="spd">속도</span></td><td><b>1 ~ 10</b><br><span class="rc">권장 2~3</span></td>
+            <td>한 번에 동시에 여는 페이지 수. <b>늘리면 빨라지지만</b> 서버에 부담을 주고 차단·오류 위험이 커집니다.
+            안정적으로는 2~3, 빠르게는 4~5.</td></tr>
+          <tr><td>간격(초) <span class="spd">속도</span></td><td><b>0 ~ 60</b><br><span class="rc">권장 0.5~2</span></td>
+            <td>요청과 요청 사이 대기 시간. <b>줄이면 빨라지지만</b> 서버 부담이 커집니다. 점검 대상이 민감하면 1~2초로 여유를 두세요.</td></tr>
+        </table>
+        <div class="note" style="margin-top:10px">빠르게: <b>동시 접속 ↑ · 간격 ↓</b> · 안전하게: <b>동시 접속 ↓ · 간격 ↑</b></div>
+      </details>
+
+      <div class="checks">
+        <label class="chk"><input type="checkbox" id="capture" checked>응답 원문 캡처(Burp)</label>
+        <label class="chk"><input type="checkbox" id="allow_subdomains">입력한 승인 호스트 아래의 서브도메인 포함</label>
+        <label class="chk"><input type="checkbox" id="show">브라우저 창 보기</label>
+        <label class="chk"><input type="checkbox" id="ignore_robots">robots.txt 무시</label>
+      </div>
+
+      <details class="adv">
+        <summary>로그인 후 수집 (권한이 있는 대상만)</summary>
+        <label for="login_url">로그인 페이지 URL (비우면 첫 주소)</label>
+        <input type="text" id="login_url" placeholder="https://example.com/login">
+        <div class="row">
+          <div><label for="username">아이디</label><input type="text" id="username" autocomplete="off"></div>
+          <div><label for="password">비밀번호</label><input type="password" id="password" autocomplete="off"></div>
+        </div>
+        <label class="chk" style="margin-top:10px"><input type="checkbox" id="manual_login">수동 로그인 (캡차·OTP·SSO — 창에서 직접 로그인)</label>
+        <details class="adv" style="margin-top:8px">
+          <summary>입력란 선택자 직접 지정 (자동 탐지 실패 시)</summary>
+          <div class="row">
+            <div><label for="username_selector">아이디 선택자</label><input type="text" id="username_selector" placeholder="#userId"></div>
+            <div><label for="password_selector">비밀번호 선택자</label><input type="text" id="password_selector" placeholder="#userPw"></div>
+          </div>
+          <label for="submit_selector">로그인 버튼 선택자</label><input type="text" id="submit_selector" placeholder=".btn-login">
+        </details>
+        <label for="session">세션 저장 파일 (선택, 예: session.json)</label>
+        <input type="text" id="session" placeholder="session.json">
+        <div class="warn">로그인 정보는 입력한 대상 사이트로 전송됩니다. 캡처에는 입력한 비밀번호의 일부 표현과 인증 헤더를 가리지만, 모든 개인정보·토큰의 제거를 보장하지 않습니다. 세션 파일과 결과 원문은 민감자료로 보관하세요. 안전한 범위 제한을 위해 리다이렉트는 차단되므로 최종 승인 URL을 직접 입력하세요.</div>
+      </details>
+
+      <div class="actions">
+        <button class="btn" id="startBtn">수집 시작</button>
+        <button class="btn stop" id="stopBtn" style="display:none">수집 중지</button>
+        <button class="btn ghost sm" id="resetInputBtn" type="button" title="입력한 URL·옵션·로그인 정보를 기본값으로 되돌립니다(저장된 결과는 지우지 않음).">입력 초기화</button>
+        <span class="state" id="state"><span class="dot"></span><span id="stateText">대기 중</span></span>
+      </div>
+
+      <div class="manual" id="manualBox">
+        <b>수동 로그인 대기 중</b><br>
+        열린 브라우저 창에서 로그인한 뒤 아래 버튼을 누르세요.
+        <div style="margin-top:10px"><button class="btn done" id="loginDoneBtn">로그인 완료 → 계속</button></div>
+      </div>
+    </section>
+
+    <!-- 진행/결과 -->
+    <section class="card">
+      <h2>진행 상황</h2>
+      <div class="prog" id="prog" aria-live="polite">
+        <div class="prog-top">
+          <span class="prog-phase" id="progPhase">대기 중</span>
+          <span class="prog-pct" id="progPct">0%</span>
+        </div>
+        <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progBar">
+          <div class="fill" id="progFill"></div>
+        </div>
+        <div class="prog-sub" id="progSub">수집을 시작하면 진행도가 표시됩니다.</div>
+      </div>
+      <pre class="log" id="log">여기에 진행 로그가 표시됩니다.</pre>
+      <div id="resultBox" style="display:none">
+        <h2 style="margin-top:16px">결과 파일</h2>
+        <div class="files" id="files"></div>
+        <div class="note">수집이 끝나면 <b>burp_history.xml</b>이 아래 <b>민감정보 탐지기</b>로 자동 전달되어 응답값 속
+          주민번호·카드·계정 등을 바로 점검합니다. 여러 번 수집하면 탐지기에 <b>추가</b>로 쌓이고, 같은 응답은 중복 제외됩니다.</div>
+      </div>
+
+      <div class="clearbox">
+        <h2>초기화 · 지우기</h2>
+        <div class="btns">
+          <button class="btn ghost sm" id="clearResultBtn" type="button">결과 지우기</button>
+          <button class="btn danger sm" id="clearAllBtn" type="button">전체 초기화</button>
+        </div>
+        <label class="chk" style="margin-top:10px"><input type="checkbox" id="clearSessions">저장된 로그인 세션 파일(output/*.json)도 삭제</label>
+        <div class="clearinfo" id="clearInfo">저장된 결과를 확인하는 중…</div>
+        <div class="clearmsg" id="clearMsg" role="status" aria-live="polite"></div>
+        <div class="note" style="margin-top:8px"><b>결과 지우기</b> = 화면의 로그·진행도·결과 파일 목록, 이 PC의 <code>output/날짜_시간</code> 폴더, 아래 탐지기의 데이터를 지웁니다.
+          <b>전체 초기화</b> = 위에 더해 입력란(URL·옵션·로그인 정보)도 기본값으로 되돌립니다. 삭제는 되돌릴 수 없으므로 한 번 더 눌러 확인합니다.</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ② 민감정보 탐지 (아래에 바로 결과가 들어옴) -->
+  <div class="detwrap">
+    <section class="card">
+      <div class="dethead">
+        <h2 style="font-size:14px;color:var(--muted)">② 민감정보 탐지</h2>
+        <p class="hint">수집한 응답 원문을 자동으로 분석합니다. (파일을 직접 올려 분석할 수도 있습니다)</p>
+        <button class="btn ghost" id="resendBtn" style="display:none">수집 결과 다시 보내기</button>
+      </div>
+      <iframe id="detFrame" src="/detector" title="민감정보 탐지기"></iframe>
+    </section>
+  </div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);
+const API_TOKEN="__LOCAL_API_TOKEN__";
+function apiFetch(url,options={}){
+  const headers=new Headers(options.headers||{});
+  headers.set('X-Local-Token',API_TOKEN);
+  if((options.method||'GET').toUpperCase()==='POST') headers.set('Content-Type','application/json');
+  return fetch(url,{...options,headers,cache:'no-store',credentials:'same-origin'});
+}
+let since=0, poll=null, lastRun='';
+const V=id=>$('#'+id).value, C=id=>$('#'+id).checked;
+
+function setState(cls,text){
+  const s=$('#state'); s.className='state '+cls; $('#stateText').textContent=text;
+}
+function payload(){
+  return {
+    urls:V('urls'), depth:V('depth'), max_pages:V('max_pages'), delay:V('delay'),
+    concurrency:V('concurrency'),
+    capture:C('capture'), allow_subdomains:C('allow_subdomains'), show:C('show'),
+    ignore_robots:C('ignore_robots'),
+    login_url:V('login_url'), username:V('username'), password:V('password'),
+    username_selector:V('username_selector'), password_selector:V('password_selector'),
+    submit_selector:V('submit_selector'), manual_login:C('manual_login'), session:V('session'),
+  };
+}
+async function start(){
+  $('#log').textContent=''; since=0; $('#resultBox').style.display='none'; $('#files').innerHTML='';
+  $('#manualBox').classList.remove('show');
+  setProgress(0,'시작하는 중…','브라우저를 준비하고 있습니다.','');
+  setState('run','실행 중…'); $('#startBtn').disabled=true; $('#stopBtn').style.display=''; setBusyUI(true); $('#clearMsg').textContent='';
+  const r=await apiFetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload())});
+  const d=await r.json();
+  if(d.error){ setState('err',d.error); $('#startBtn').disabled=false; $('#stopBtn').style.display='none'; setBusyUI(false); appendLog(d.error); return; }
+  poll=setInterval(tick,700); tick();
+}
+async function stop(){
+  $('#stopBtn').disabled=true; $('#stopBtn').textContent='중지 중…';
+  await apiFetch('/api/stop',{method:'POST'});
+  appendLog('중지를 요청했습니다. 진행 중인 요청이 끝나면 멈춥니다…');
+}
+function appendLog(lines){
+  const pre=$('#log'); const atBottom=pre.scrollTop+pre.clientHeight>=pre.scrollHeight-20;
+  pre.textContent+=(pre.textContent?'\n':'')+(Array.isArray(lines)?lines.join('\n'):lines);
+  if(atBottom) pre.scrollTop=pre.scrollHeight;
+}
+function setProgress(pct,phase,sub,cls){
+  const box=$('#prog'); box.className='prog'+(cls?' '+cls:'');
+  $('#progPct').textContent=pct+'%'; $('#progFill').style.width=pct+'%';
+  $('#progBar').setAttribute('aria-valuenow',pct);
+  $('#progPhase').textContent=phase; $('#progSub').textContent=sub||'';
+}
+function renderProgress(d){
+  const p=d.progress||{done:0,total:0,pct:0};
+  const est='처리 '+p.done+' / 발견 '+p.total+'페이지 · 링크를 따라가며 발견되는 페이지에 따라 전체 수가 늘 수 있는 추정치입니다.';
+  if(d.state==='error'){ setProgress(p.pct,'오류로 중단됨',d.error||'','error'); return; }
+  if(d.state==='done'){
+    if(d.stopped) setProgress(p.pct,'수집 중지됨','지금까지 '+p.done+'페이지를 수집해 저장했습니다.','stopped');
+    else setProgress(100,'수집 완료','총 '+p.done+'페이지를 수집했습니다.','done');
+    return;
+  }
+  if(d.needs_manual){ setProgress(0,'수동 로그인 대기 중','브라우저 창에서 로그인한 뒤 [로그인 완료]를 누르세요.','wait'); return; }
+  if(d.phase==='login'){ setProgress(0,'로그인 중…','로그인이 끝나면 수집 진행도가 표시됩니다.','wait'); return; }
+  if(d.phase==='save'){ setProgress(Math.max(p.pct,99),'결과 저장 중…','파일을 만들고 있습니다.',''); return; }
+  setProgress(p.pct,'수집 중…',est,'');
+}
+async function tick(){
+  const r=await apiFetch('/api/status?since='+since); const d=await r.json();
+  if(d.log&&d.log.length){ appendLog(d.log); since=d.log_total; }
+  $('#manualBox').classList.toggle('show', !!d.needs_manual);
+  if(d.needs_manual) setState('wait','수동 로그인 대기 중');
+  else if(d.state==='running') setState('run','실행 중… '+((d.progress&&d.phase==='crawl')?d.progress.pct+'%':''));
+  renderProgress(d);
+  if(d.state==='done'||d.state==='error'){
+    clearInterval(poll); poll=null;
+    $('#startBtn').disabled=false; $('#stopBtn').style.display='none';
+    $('#stopBtn').disabled=false; $('#stopBtn').textContent='수집 중지'; setBusyUI(false); refreshClearInfo();
+    if(d.state==='done'){ lastRun=d.run||''; setState('done',d.stopped?'중지됨':'완료'); showFiles(d.files); }
+    else setState('err','오류: '+(d.error||''));
+  }
+}
+function showFiles(files){
+  if(!files||!files.length) return;
+  $('#resultBox').style.display='block';
+  $('#files').innerHTML='';
+  let hasBurp=false;
+  for(const f of files){
+    if(f.name==='burp_history.xml') hasBurp=true;
+    const kb=(f.size/1024).toFixed(f.size>1024?0:1);
+    const row=document.createElement('div'); row.className='file';
+    const star=f.name==='burp_history.xml'?' ★':'';
+    row.innerHTML=`<span class="nm"><b>${f.name}</b>${star} <span style="color:var(--faint)">${kb} KB</span></span>`;
+    const a=document.createElement('a'); a.href='#';
+    a.textContent='내려받기';
+    a.addEventListener('click',async event=>{
+      event.preventDefault();
+      try{
+        const response=await apiFetch('/api/download?name='+encodeURIComponent(f.name));
+        if(!response.ok) throw new Error('다운로드 인증 또는 파일 확인 실패');
+        const blobUrl=URL.createObjectURL(await response.blob());
+        const link=document.createElement('a');link.href=blobUrl;link.download=f.name;link.click();
+        setTimeout(()=>URL.revokeObjectURL(blobUrl),1000);
+      }catch(error){appendLog(String(error));}
+    }); row.appendChild(a);
+    $('#files').appendChild(row);
+  }
+  if(hasBurp){ $('#resendBtn').style.display=''; sendToDetector(true); }
+}
+async function sendToDetector(scroll){
+  try{
+    const r=await apiFetch('/api/download?name=burp_history.xml');
+    if(!r.ok) return;
+    const text=await r.text();
+    const frame=$('#detFrame');
+    const post=()=>frame.contentWindow.postMessage({type:'load-burp',text,name:'burp_history('+(lastRun||'수집')+').xml'},location.origin);
+    post();
+    appendLog('민감정보 탐지기로 결과를 전달했습니다. 아래에서 확인하세요.');
+    if(scroll) frame.scrollIntoView({behavior:'smooth',block:'start'});
+  }catch(e){ appendLog('탐지기 전달 실패: '+e); }
+}
+// ── 초기화 · 지우기 ──
+const DEFAULTS={urls:'',depth:'2',max_pages:'100',concurrency:'2',delay:'1',login_url:'',username:'',password:'',
+  username_selector:'',password_selector:'',submit_selector:'',session:''};
+const CHECK_DEFAULTS={capture:true,allow_subdomains:false,show:false,ignore_robots:false,manual_login:false};
+function resetInputs(){
+  for(const [k,v] of Object.entries(DEFAULTS)) $('#'+k).value=v;
+  for(const [k,v] of Object.entries(CHECK_DEFAULTS)) $('#'+k).checked=v;
+}
+function resetOutputView(){
+  lastRun='';
+  $('#log').textContent='여기에 진행 로그가 표시됩니다.'; since=0;
+  $('#resultBox').style.display='none'; $('#files').innerHTML=''; $('#resendBtn').style.display='none';
+  $('#manualBox').classList.remove('show');
+  setProgress(0,'대기 중','수집을 시작하면 진행도가 표시됩니다.','');
+  setState('','대기 중');
+  const f=$('#detFrame'); if(f.contentWindow) f.contentWindow.postMessage({type:'clear-data'},location.origin);
+}
+function fmtBytes(n){ return n>=1048576?(n/1048576).toFixed(1)+' MB':n>=1024?Math.round(n/1024)+' KB':n+' B'; }
+async function refreshClearInfo(){
+  try{
+    const d=await (await apiFetch('/api/outputs')).json();
+    $('#clearInfo').textContent=`이 PC에 저장된 결과 폴더 ${d.runs}개 (${fmtBytes(d.bytes)}) · 로그인 세션 파일 ${d.sessions}개`;
+  }catch(e){ $('#clearInfo').textContent=''; }
+}
+function setBusyUI(running){
+  for(const id of ['clearResultBtn','clearAllBtn','resetInputBtn']) $('#'+id).disabled=running;
+}
+const armed={};
+function twoStep(btn,label,armedLabel,action){
+  btn.addEventListener('click',()=>{
+    if(!armed[btn.id]){
+      btn.textContent=armedLabel; btn.classList.add('armed');
+      armed[btn.id]=setTimeout(()=>disarm(btn,label),4000); return;
+    }
+    disarm(btn,label); action();
+  });
+}
+function disarm(btn,label){ clearTimeout(armed[btn.id]); armed[btn.id]=null; btn.textContent=label; btn.classList.remove('armed'); }
+async function doClear(alsoInputs){
+  $('#clearMsg').textContent='';
+  const r=await apiFetch('/api/clear',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({sessions:$('#clearSessions').checked})});
+  const d=await r.json();
+  if(d.error){ $('#clearMsg').style.color='var(--flag)'; $('#clearMsg').textContent=d.error; return; }
+  resetOutputView(); if(alsoInputs) resetInputs();
+  $('#clearMsg').style.color='var(--ok)';
+  $('#clearMsg').textContent=`지웠습니다 · 결과 폴더 ${d.removed_runs}개(${fmtBytes(d.freed_bytes)})`+
+    (d.removed_sessions?` · 세션 파일 ${d.removed_sessions}개`:'')+(alsoInputs?' · 입력란 초기화':'')+' · 탐지기 데이터 비움';
+  refreshClearInfo();
+}
+twoStep($('#clearResultBtn'),'결과 지우기','한 번 더 누르면 삭제',()=>doClear(false));
+twoStep($('#clearAllBtn'),'전체 초기화','한 번 더 누르면 전체 초기화',()=>doClear(true));
+$('#resetInputBtn').addEventListener('click',()=>{ resetInputs(); $('#clearMsg').style.color='var(--ok)'; $('#clearMsg').textContent='입력란을 기본값으로 되돌렸습니다.'; });
+refreshClearInfo();
+
+// 범위 벗어난 입력값 보정
+function clamp(el){
+  const mn=parseFloat(el.dataset.min), mx=parseFloat(el.dataset.max);
+  let v=parseFloat(el.value);
+  if(isNaN(v)) return;
+  if(!isNaN(mn)&&v<mn) el.value=mn;
+  if(!isNaN(mx)&&v>mx) el.value=mx;
+}
+document.querySelectorAll('input[data-min]').forEach(el=>el.addEventListener('change',()=>clamp(el)));
+$('#resendBtn').addEventListener('click',()=>sendToDetector(true));
+$('#startBtn').addEventListener('click',start);
+$('#stopBtn').addEventListener('click',stop);
+$('#loginDoneBtn').addEventListener('click',async()=>{
+  $('#manualBox').classList.remove('show');
+  await apiFetch('/api/login_done',{method:'POST'});
+});
+$('#detectorHint').addEventListener('click',e=>{e.preventDefault();
+  $('#detFrame').scrollIntoView({behavior:'smooth',block:'start'});});
+</script>
+</body>
+</html>

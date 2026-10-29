@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<items>
+<item><url>https://agency.example.test/demo/1</url><method>GET</method><status>200</status><response base64="true">SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL2pzb247IGNoYXJzZXQ9dXRmLTgNCg0KeyJ1c2VyX25tIjogIuqwgOyDge2ajOybkCIsICJlbWFpbCI6ICJtZW1iZXJAZXhhbXBsZS50ZXN0IiwgInBob25lIjogIjAxMC0wMDAwLTAwMDAifQ==</response></item>
+<item><url>https://agency.example.test/demo/2</url><method>GET</method><status>200</status><response base64="true">SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL2pzb24NCkNvbnRlbnQtRW5jb2Rpbmc6IGd6aXANCg0KH4sIALrX4moC/6tWSs1NzMxRslJQSq/KLNDNTc1NSi1ySK1IzC3ISdUrSS0uUaoFAGJZRHElAAAA</response></item>
+<item><url>https://agency.example.test/demo/3</url><method>GET</method><status>200</status><response base64="true">SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvaHRtbA0KDQo8aHRtbD48Ym9keT48ZGl2IGRhdGEtZW1haWw9ImF0dHJpYnV0ZUBleGFtcGxlLnRlc3QiPlN5bnRoZXRpYzwvZGl2PjxzY3JpcHQ+d2luZG93LmRlbW89eyJlbWFpbCI6InNjcmlwdEBleGFtcGxlLnRlc3QifTs8L3NjcmlwdD48L2JvZHk+PC9odG1sPg==</response></item>
+</items>

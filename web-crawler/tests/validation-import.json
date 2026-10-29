@@ -1,0 +1,33 @@
+{
+  "passed": 24,
+  "checks": [
+    "Burp XML base64 normal import and normalized keys",
+    "gzip decoded and original wire evidence/hash retained",
+    "deflate decoded and original wire evidence/hash retained",
+    "Brotli unsupported browser explicitly accounted",
+    "chunked transfer de-framing",
+    "one bad Base64 item isolated with good item retained",
+    "same URL/body distinct 200 and 500 transactions retained",
+    "2xx display filter preserves original transactions",
+    "inline script inspected as inert text",
+    "HTML attribute inspected as inert text",
+    "HTML entity attribute inspected as inert text",
+    "XML attribute inspected as inert text",
+    "WebSquare XML inspected as inert text",
+    "script static response inspected as inert text",
+    "response header-only finding",
+    "deep JSON bounded and marked partial without stack overflow",
+    "PDF explicitly unsupported rather than clean result",
+    "missing response explicitly accounted",
+    "asset mode cached coverage follows selected scope",
+    "normalized import hash links to original wire response",
+    "SHA-256 known vectors",
+    "EUC-KR response decoded without corrupting raw bytes",
+    "actual file import SHA and failed-file accounting",
+    "no browser script errors or external requests"
+  ],
+  "skipped": [
+    "file:// navigation blocked by managed-browser policy; local HTTP server verified separately"
+  ],
+  "browser": "154.0.8037.57"
+}
